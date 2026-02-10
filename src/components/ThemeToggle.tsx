@@ -35,7 +35,7 @@ export default function ThemeToggle() {
   if (!mounted) {
     return (
       <div
-        className="h-9 w-9 animate-pulse rounded-lg border border-border bg-card"
+        className="h-9 w-9 animate-pulse rounded-md border border-border bg-card"
         aria-hidden="true"
       />
     );
@@ -53,7 +53,7 @@ export default function ThemeToggle() {
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         id="theme-toggle-button"
-        className="rounded-lg border border-border bg-card p-2 text-foreground shadow-sm transition hover:bg-muted"
+        className="rounded-md border border-border bg-card p-2 text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <CurrentIcon className="h-5 w-5" />
       </button>
@@ -62,7 +62,7 @@ export default function ThemeToggle() {
         <div
           role="listbox"
           aria-labelledby="theme-toggle-button"
-          className="absolute right-0 top-full z-50 mt-2 w-40 overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+          className="absolute right-0 top-full z-50 mt-2 w-40 overflow-hidden rounded-md border border-border bg-card shadow-lg"
         >
           {THEMES.map(({ value, label, icon: Icon }) => (
             <button
@@ -74,10 +74,13 @@ export default function ThemeToggle() {
                 setTheme(value);
                 setIsOpen(false);
               }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition hover:bg-muted"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
             >
               <Icon className="h-4 w-4 shrink-0" />
               <span className="flex-1">{label}</span>
+              {currentTheme === value && (
+                <CheckIcon className="h-4 w-4 shrink-0 text-primary" />
+              )}
             </button>
           ))}
         </div>
@@ -109,6 +112,14 @@ function MonitorIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
       <rect x="2" y="3" width="20" height="14" rx="2" />
       <path d="M8 21h8M12 17v4" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   );
 }
