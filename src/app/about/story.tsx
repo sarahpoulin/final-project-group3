@@ -1,8 +1,8 @@
 export default function Story() {
   return (
-    <section aria-labelledby="our-story" className="mb-12">
-      <div className="max-w-3xl">
-        <h2 id="our-story" className="text-2xl font-semibold mb-4">Our Story</h2>
+    <section aria-labelledby="our-story" className="mb-12 bg-muted p-6 rounded-lg">
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <h2 id="our-story" className="text-2xl font-semibold mb-6">Our Story</h2>
         <p className="text-foreground mb-4">
           Shoreline Woodworks is a family-run woodworking studio based in Halifax, Nova Scotia.
           For over a decade, we have specialized in custom woodworking, architectural millwork,
