@@ -20,6 +20,10 @@
   --destructive: #b91c1c;
   --destructive-foreground: #ffffff;
 
+  /* Navigation tokens */
+  --nav-hover: #e8f5e9;
+  --nav-active: #2d5f3f;
+
   /* Typography tokens */
   --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", Roboto, Arial,
     "Noto Sans", "Liberation Sans", sans-serif;
@@ -51,6 +55,10 @@
   --destructive: #ef4444;
   --destructive-foreground: #111827;
 
+  /* Navigation tokens */
+  --nav-hover: #1e3a29;
+  --nav-active: #2d5f3f;
+
   color-scheme: dark;
 }
 
@@ -70,6 +78,10 @@
   --color-accent-foreground: var(--accent-foreground);
 
   --color-ring: var(--ring);
+
+  /* Navigation */
+  --color-nav-hover: var(--nav-hover);
+  --color-nav-active: var(--nav-active);
 
   /* Typography */
   --font-sans: var(--font-sans);
