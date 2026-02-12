@@ -15,7 +15,7 @@ const clarendonCondensed = localFont({
 
 export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const isAuthenticated = status === "authenticated";
 
   const handleLogout = async () => {

@@ -16,7 +16,7 @@ const tabs = [
 ];
 
 export default function AdminPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [activeTab, setActiveTab] = useState<TabType>('projects');
 
   // Loading state
