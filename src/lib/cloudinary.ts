@@ -5,6 +5,9 @@ cloudinary.config({
   // Credentials are read from process.env.CLOUDINARY_URL by default
 });
 
+/**
+ * Normalized result of an image upload to Cloudinary.
+ */
 export interface UploadResult {
   publicId: string;
   secureUrl: string;
@@ -14,11 +17,26 @@ export interface UploadResult {
 }
 
 type UploadOptions = {
+  /**
+   * Optional Cloudinary transformation options applied during upload.
+   */
   transformation?: object;
+  /**
+   * Optional explicit public ID for the asset; otherwise Cloudinary generates one.
+   */
   publicId?: string;
+  /**
+   * Optional Cloudinary folder name; defaults to `"projects"`.
+   */
   folder?: string;
 };
 
+/**
+ * Upload an image to Cloudinary.
+ *
+ * Accepts either a base64/data-URI or URL (`string`) or a `Buffer` and returns
+ * normalized upload metadata. Throws on upload failure.
+ */
 export async function uploadImage(
   file: string | Buffer,
   options: UploadOptions = {},
@@ -81,6 +99,11 @@ export async function uploadImage(
   });
 }
 
+/**
+ * Delete an image from Cloudinary by its public ID.
+ *
+ * No-op when `publicId` is falsy.
+ */
 export async function deleteImage(publicId: string): Promise<void> {
   if (!publicId) return;
 
@@ -89,26 +112,38 @@ export async function deleteImage(publicId: string): Promise<void> {
   });
 }
 
+/**
+ * Replace a project's image in Cloudinary.
+ *
+ * Best-effort deletes the existing image (if any) and uploads a new one, returning
+ * the new upload metadata.
+ */
 export async function replaceProjectImage(
   oldPublicId: string | null | undefined,
   fileBuffer: Buffer,
   options: Omit<UploadOptions, "publicId"> = {},
 ): Promise<UploadResult> {
+  // First upload the new image so we always have a valid asset to point to.
+  const uploaded = await uploadImage(fileBuffer, options);
+
+  // Best-effort delete of the old image; failures are logged but do not affect the result.
   if (oldPublicId) {
     try {
       await deleteImage(oldPublicId);
     } catch (error) {
-      // Log and continue; we still want to upload the new image
       console.error("Failed to delete old Cloudinary image", error);
     }
   }
 
-  return uploadImage(fileBuffer, options);
+  return uploaded;
 }
 
-/** Matches cloudinary://API_KEY:API_SECRET@CLOUD_NAME */
+/** Matches `cloudinary://API_KEY:API_SECRET@CLOUD_NAME`. */
 const CLOUDINARY_URL_REGEX = /^cloudinary:\/\/[^:]+:[^@]+@[a-zA-Z0-9_-]+$/;
 
+/**
+ * Ensure `CLOUDINARY_URL` is set and has a valid format before generating URLs.
+ */
 function assertCloudinaryUrlConfigured(): void {
   const url = process.env.CLOUDINARY_URL;
   if (!url || url.trim() === "") {
@@ -122,13 +157,24 @@ function assertCloudinaryUrlConfigured(): void {
 }
 
 type OptimizeOptions = {
+  /** Optional target width in pixels. */
   width?: number;
+  /** Optional target height in pixels. */
   height?: number;
+  /** Optional Cloudinary crop mode (e.g. `"fill"`, `"fit"`). */
   crop?: string;
+  /** Optional quality setting (e.g. `"auto"` or a numeric value). */
   quality?: string | number;
+  /** Optional output format (e.g. `"webp"`, `"jpg"`). */
   format?: string;
 };
 
+/**
+ * Generate a secure, optimized Cloudinary URL for a given public ID.
+ *
+ * Applies basic transformation options (width, height, crop, quality, format)
+ * and always returns an HTTPS URL.
+ */
 export function getOptimizedImageUrl(
   publicId: string,
   options: OptimizeOptions = {},

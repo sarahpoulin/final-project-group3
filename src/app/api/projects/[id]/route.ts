@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyAdmin } from "@/lib/auth-guards";
-import { deleteImage, replaceProjectImage } from "@/lib/cloudinary";
+import { deleteImage, uploadImage } from "@/lib/cloudinary";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,11 @@ type RouteParams = {
   params: Promise<{ id: string }>;
 };
 
-/** Public: no authentication required. Returns a single project by id or 404. */
+/**
+ * GET /api/projects/[id]
+ *
+ * Public endpoint that returns a single project by id, or 404 if it does not exist.
+ */
 export async function GET(_req: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
@@ -45,10 +49,11 @@ export async function GET(_req: Request, { params }: RouteParams) {
 }
 
 /**
- * Admin only. Accepts multipart/form-data with optional fields:
- * title, description, category (strings), featured ("true"/"false"),
- * image (File), removeImage ("true" to remove image without replacement).
- * Returns the full updated project object on success.
+ * PATCH /api/projects/[id]
+ *
+ * Admin-only endpoint that updates an existing project using multipart/form-data.
+ * Supports optional `title`, `description`, `category`, `featured`, `image` (replace),
+ * and `removeImage` (delete existing image without replacement), and returns the updated project.
  */
 export async function PATCH(req: Request, { params }: RouteParams) {
   const { id } = await params;
@@ -56,6 +61,9 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   if (!adminResult.ok) {
     return adminResult.response;
   }
+
+  // Track a new image public ID so we can clean it up in case the DB update fails.
+  let newUploadedPublicId: string | null = null;
 
   try {
     const existing = await prisma.project.findUnique({
@@ -80,17 +88,10 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     let imageUrl: string | null = existing.imageUrl;
     let imagePublicId: string | null = existing.imagePublicId;
 
-    if (removeImage === "true" && existing.imagePublicId) {
-      try {
-        await deleteImage(existing.imagePublicId);
-      } catch (error) {
-        console.error("Failed to delete project image in Cloudinary", error);
-      }
-      imageUrl = null;
-      imagePublicId = null;
-    }
+    const hasNewImage = image instanceof File && image.size > 0;
 
-    if (image instanceof File && image.size > 0) {
+    // If a new image is provided, treat this as a replace operation and ignore `removeImage`.
+    if (hasNewImage) {
       if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
         return NextResponse.json(
           {
@@ -108,9 +109,29 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       }
 
       const buffer = Buffer.from(await image.arrayBuffer());
-      const uploaded = await replaceProjectImage(existing.imagePublicId, buffer);
+      const uploaded = await uploadImage(buffer);
       imageUrl = uploaded.secureUrl;
       imagePublicId = uploaded.publicId;
+      newUploadedPublicId = uploaded.publicId;
+    } else if (removeImage === "true") {
+      if (existing.imagePublicId) {
+        try {
+          await deleteImage(existing.imagePublicId);
+          // Only clear DB fields if Cloudinary deletion succeeds
+          imageUrl = null;
+          imagePublicId = null;
+        } catch (error) {
+          console.error("Failed to delete project image in Cloudinary", error);
+          return NextResponse.json(
+            { error: "Failed to delete existing image" },
+            { status: 500 },
+          );
+        }
+      } else {
+        // No Cloudinary image, but honor explicit removeImage request
+        imageUrl = null;
+        imagePublicId = null;
+      }
     }
 
     const updated = await prisma.project.update({
@@ -137,9 +158,28 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       },
     });
 
+    // After a successful DB update, delete the old image if we uploaded a new one.
+    if (hasNewImage && existing.imagePublicId && existing.imagePublicId !== imagePublicId) {
+      try {
+        await deleteImage(existing.imagePublicId);
+      } catch (error) {
+        console.error("Failed to delete old project image in Cloudinary after update", error);
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (error) {
     console.error("Failed to update project", error);
+
+    // Best-effort cleanup if a new image was uploaded but the DB update failed.
+    if (newUploadedPublicId) {
+      try {
+        await deleteImage(newUploadedPublicId);
+      } catch (cleanupError) {
+        console.error("Failed to cleanup newly uploaded image after DB error", cleanupError);
+      }
+    }
+
     return NextResponse.json(
       { error: "Failed to update project" },
       { status: 500 },
@@ -148,8 +188,10 @@ export async function PATCH(req: Request, { params }: RouteParams) {
 }
 
 /**
- * Admin only. Deletes the project and its Cloudinary image (if any).
- * Process: verify admin → fetch project → 404 if not found → delete image from Cloudinary (best effort) → delete project → return success.
+ * DELETE /api/projects/[id]
+ *
+ * Admin-only endpoint that deletes a project and, if present, its associated Cloudinary image.
+ * Returns `{ success: true }` when deletion succeeds, or 404 if the project is not found.
  */
 export async function DELETE(req: Request, { params }: RouteParams) {
   const { id } = await params;

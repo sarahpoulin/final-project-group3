@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
-import { uploadImage } from "@/lib/cloudinary";
+import { uploadImage, deleteImage } from "@/lib/cloudinary";
 
 export const runtime = "nodejs";
 
@@ -15,6 +15,11 @@ const ALLOWED_IMAGE_TYPES = new Set([
 
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
+/**
+ * GET /api/projects
+ *
+ * Returns a list of projects, optionally filtered by `category` and `featured` query parameters.
+ */
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -49,13 +54,20 @@ export async function GET(req: Request) {
   }
 }
 
+/**
+ * POST /api/projects
+ *
+ * Admin-only endpoint that creates a new project from multipart/form-data, optionally uploading
+ * an image to Cloudinary. Requires a non-empty `title` field and validates image type and size.
+ */
 export async function POST(req: Request) {
   // 1. Require authentication and verify user has isAdmin: true (from session, populated from DB in auth callback)
   const adminResult = await requireAdmin(req);
   if (!adminResult.ok) {
-    //console.error("Failed to verify admin", adminResult);
     return adminResult.response;
   }
+
+  let uploadedPublicId: string | null = null;
 
   try {
     // 2. Parse FormData from request
@@ -109,6 +121,7 @@ export async function POST(req: Request) {
       const uploaded = await uploadImage(buffer);
       imageUrl = uploaded.secureUrl;
       imagePublicId = uploaded.publicId;
+       uploadedPublicId = uploaded.publicId;
     }
 
     // 5. Create project in database with Prisma
@@ -131,6 +144,14 @@ export async function POST(req: Request) {
     return NextResponse.json(project, { status: 201 });
   } catch (error) {
     console.error("Failed to create project", error);
+    // Best-effort cleanup of an image that was uploaded before the DB error occurred.
+    if (uploadedPublicId) {
+      try {
+        await deleteImage(uploadedPublicId);
+      } catch (cleanupError) {
+        console.error("Failed to cleanup uploaded image after DB error", cleanupError);
+      }
+    }
     return NextResponse.json(
       { error: "Failed to create project" },
       { status: 500 },

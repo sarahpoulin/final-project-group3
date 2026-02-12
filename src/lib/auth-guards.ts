@@ -3,6 +3,10 @@ import type { Session } from "next-auth";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
+/**
+ * Result type returned by admin guard helpers. When `ok` is `false`, `response`
+ * contains the HTTP response that should be returned from the route handler.
+ */
 export type RequireAdminResult =
   | {
       ok: true;
@@ -18,7 +22,10 @@ export type RequireAdminResult =
 /** Optional context for auth() so it can read cookies from the request (e.g. when called from API routes). */
 type AuthContext = { params?: Promise<Record<string, string>> | Record<string, string> };
 
-/** Parse session token from request Cookie header (next-auth.session-token or __Secure- variant). */
+/**
+ * Parse the session token from the request Cookie header, supporting both
+ * `next-auth.session-token` and `__Secure-next-auth.session-token` cookie names.
+ */
 function getSessionTokenFromRequest(request: Request): string | null {
   const cookieHeader = request.headers.get("cookie");
   if (!cookieHeader) return null;
@@ -28,7 +35,11 @@ function getSessionTokenFromRequest(request: Request): string | null {
   return match ? decodeURIComponent(match[1].trim()) : null;
 }
 
-/** Call auth with request/ctx so it reads the session cookie from the incoming request. */
+/**
+ * Call `auth()` with the given request/context (when provided) so it reads the
+ * session cookie from the incoming request, falling back to `auth()` with no
+ * arguments when called outside of a route handler.
+ */
 const getSession = async (
   request?: Request,
   ctx?: AuthContext,
@@ -39,6 +50,13 @@ const getSession = async (
   return (await auth()) as Session | null;
 };
 
+/**
+ * Guard helper for collection endpoints (e.g. POST /api/projects).
+ *
+ * Verifies that the incoming request belongs to an authenticated admin user.
+ * On success returns `{ ok: true, session }`, otherwise `{ ok: false, response }`
+ * with an appropriate 401/403 response.
+ */
 export async function requireAdmin(
   request?: Request,
   ctx?: AuthContext,
@@ -46,7 +64,7 @@ export async function requireAdmin(
   const session = await getSession(request, ctx);
 
   if (!session) {
-    console.error("[requireAdmin] 401: no session (missing or invalid cookie)");
+    // console.error("[requireAdmin] 401: no session (missing or invalid cookie)");
     return {
       ok: false,
       session: null,
@@ -100,11 +118,11 @@ export async function requireAdmin(
     }
   }
 
-  console.error("[requireAdmin] 403: session exists but user is not admin", {
-    email: session.user?.email ?? "(no email)",
-    isAdmin: session.user?.isAdmin,
-    userId: userId ?? "(no id)",
-  });
+  // console.error("[requireAdmin] 403: session exists but user is not admin", {
+  //   email: session.user?.email ?? "(no email)",
+  //   isAdmin: session.user?.isAdmin,
+  //   userId: userId ?? "(no id)",
+  // });
   return {
     ok: false,
     session: null,
@@ -115,14 +133,19 @@ export async function requireAdmin(
   };
 }
 
+/**
+ * Result type used by `verifyAdmin`, which only exposes whether the current user
+ * is an admin (and a ready-made HTTP response when not).
+ */
 export type VerifyAdminResult =
   | { ok: true; user: { isAdmin: true } }
   | { ok: false; response: NextResponse };
 
 /**
- * Validates the request by checking the session and verifying isAdmin from the database.
- * Use this for individual resource operations (e.g. PATCH/DELETE /api/projects/[id]).
- * Pass the request (and optional ctx) so auth() can read the session cookie.
+ * Guard helper for item endpoints (e.g. PATCH/DELETE /api/projects/[id]).
+ *
+ * Validates the request by checking the session and verifying `isAdmin` directly
+ * from the database, using either the session's email or the session token.
  */
 export async function verifyAdmin(
   request?: Request,
@@ -131,7 +154,7 @@ export async function verifyAdmin(
   const session = await getSession(request, ctx);
 
   if (!session) {
-    console.error("[verifyAdmin] 401: no session");
+    // console.error("[verifyAdmin] 401: no session");
     return {
       ok: false,
       response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
@@ -144,16 +167,11 @@ export async function verifyAdmin(
       select: { isAdmin: true },
     });
     if (user?.isAdmin) {
+      // Email-based lookup confirms admin; no need to consult session token.
       return { ok: true, user: { isAdmin: true } };
     }
-    console.error("[verifyAdmin] 403: user in DB is not admin", {
-      email: session.user.email,
-      dbIsAdmin: user?.isAdmin,
-    });
-    return {
-      ok: false,
-      response: NextResponse.json({ error: "Forbidden" }, { status: 403 }),
-    };
+    // If the email-based lookup does not confirm admin, fall through and
+    // give the session-token-based lookup a chance before deciding.
   }
 
   if (request) {
@@ -166,23 +184,24 @@ export async function verifyAdmin(
           user: { select: { isAdmin: true } },
         },
       });
-      if (dbSession && dbSession.expires > new Date() && dbSession.user?.isAdmin) {
-        return { ok: true, user: { isAdmin: true } };
-      }
-      if (dbSession && !dbSession.user?.isAdmin) {
-        console.error("[verifyAdmin] 403: user in DB is not admin (from session lookup)");
+      if (dbSession && dbSession.expires > new Date()) {
+        if (dbSession.user?.isAdmin) {
+          return { ok: true, user: { isAdmin: true } };
+        }
+        // valid (non-expired) session but user is not admin → 403
         return {
           ok: false,
           response: NextResponse.json({ error: "Forbidden" }, { status: 403 }),
         };
       }
+      // expired or missing session will fall through to the final 401 handler
     }
   }
 
-  console.error("[verifyAdmin] 401: no email and no valid session token", {
-    hasSession: !!session,
-    hasEmail: !!session?.user?.email,
-  });
+  // console.error("[verifyAdmin] 401: no email and no valid session token", {
+  //   hasSession: !!session,
+  //   hasEmail: !!session?.user?.email,
+  // });
   return {
     ok: false,
     response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
