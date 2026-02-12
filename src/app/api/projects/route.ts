@@ -5,6 +5,16 @@ import { uploadImage } from "@/lib/cloudinary";
 
 export const runtime = "nodejs";
 
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -29,7 +39,7 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json({ data: projects });
+    return NextResponse.json(projects);
   } catch (error) {
     console.error("Failed to fetch projects", error);
     return NextResponse.json(
@@ -40,12 +50,15 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const adminResult = await requireAdmin();
+  // 1. Require authentication and verify user has isAdmin: true (from session, populated from DB in auth callback)
+  const adminResult = await requireAdmin(req);
   if (!adminResult.ok) {
+    //console.error("Failed to verify admin", adminResult);
     return adminResult.response;
   }
 
   try {
+    // 2. Parse FormData from request
     const formData = await req.formData();
 
     const title = formData.get("title");
@@ -54,7 +67,16 @@ export async function POST(req: Request) {
     const featured = formData.get("featured");
     const image = formData.get("image");
 
+    // 3. Validate required fields
     if (!title || typeof title !== "string") {
+      return NextResponse.json(
+        { error: "Title is required" },
+        { status: 400 },
+      );
+    }
+
+    const titleTrimmed = title.trim();
+    if (!titleTrimmed) {
       return NextResponse.json(
         { error: "Title is required" },
         { status: 400 },
@@ -64,19 +86,21 @@ export async function POST(req: Request) {
     let imageUrl: string | null = null;
     let imagePublicId: string | null = null;
 
-    if (image instanceof File) {
-      if (!image.type.startsWith("image/")) {
+    // 4. If image provided: validate type and size, convert to Buffer, get imageUrl and imagePublicId
+    if (image instanceof File && image.size > 0) {
+      if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
         return NextResponse.json(
-          { error: "Image must be of type image/*" },
+          {
+            error:
+              "Invalid image type. Allowed: image/jpeg, image/jpg, image/png, image/webp, image/gif",
+          },
           { status: 400 },
         );
       }
 
-      // 5MB default limit
-      const maxSizeBytes = 5 * 1024 * 1024;
-      if (image.size > maxSizeBytes) {
+      if (image.size > MAX_IMAGE_SIZE_BYTES) {
         return NextResponse.json(
-          { error: "Image file is too large (max 5MB)" },
+          { error: "Image file is too large (max 10MB)" },
           { status: 400 },
         );
       }
@@ -87,21 +111,24 @@ export async function POST(req: Request) {
       imagePublicId = uploaded.publicId;
     }
 
+    // 5. Create project in database with Prisma
     const project = await prisma.project.create({
       data: {
-        title,
-        description: description && typeof description === "string"
-          ? description
-          : null,
-        category: category && typeof category === "string" ? category : null,
-        featured:
-          typeof featured === "string" ? featured === "true" : false,
+        title: titleTrimmed,
+        description:
+          description && typeof description === "string"
+            ? description.trim() || null
+            : null,
+        category:
+          category && typeof category === "string" ? category.trim() || null : null,
+        featured: typeof featured === "string" ? featured === "true" : false,
         imageUrl,
         imagePublicId,
       },
     });
 
-    return NextResponse.json({ data: project }, { status: 201 });
+    // 6. Return created project with 201 status
+    return NextResponse.json(project, { status: 201 });
   } catch (error) {
     console.error("Failed to create project", error);
     return NextResponse.json(

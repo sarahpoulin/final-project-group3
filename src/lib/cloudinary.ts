@@ -106,6 +106,21 @@ export async function replaceProjectImage(
   return uploadImage(fileBuffer, options);
 }
 
+/** Matches cloudinary://API_KEY:API_SECRET@CLOUD_NAME */
+const CLOUDINARY_URL_REGEX = /^cloudinary:\/\/[^:]+:[^@]+@[a-zA-Z0-9_-]+$/;
+
+function assertCloudinaryUrlConfigured(): void {
+  const url = process.env.CLOUDINARY_URL;
+  if (!url || url.trim() === "") {
+    throw new Error("CLOUDINARY_URL is not set");
+  }
+  if (!CLOUDINARY_URL_REGEX.test(url.trim())) {
+    throw new Error(
+      "CLOUDINARY_URL has invalid format; expected cloudinary://API_KEY:API_SECRET@CLOUD_NAME",
+    );
+  }
+}
+
 type OptimizeOptions = {
   width?: number;
   height?: number;
@@ -118,6 +133,8 @@ export function getOptimizedImageUrl(
   publicId: string,
   options: OptimizeOptions = {},
 ): string {
+  assertCloudinaryUrlConfigured();
+
   const { width, height, crop, quality, format } = options;
 
   const transformation: Record<string, unknown> = {};
