@@ -40,7 +40,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
 
     return NextResponse.json(project);
   } catch (error) {
-    console.error("Failed to fetch project", error);
+    //console.error("Failed to fetch project", error);
     return NextResponse.json(
       { error: "Failed to fetch project" },
       { status: 500 },
@@ -85,6 +85,20 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     const image = formData.get("image");
     const removeImage = formData.get("removeImage");
 
+    if (!title || typeof title !== "string") {
+      return NextResponse.json(
+        { error: "Title is required" },
+        { status: 400 },
+      );
+    }
+    const titleTrimmed = title.trim();
+    if (!titleTrimmed) {
+      return NextResponse.json(
+        { error: "Title is required" },
+        { status: 400 },
+      );
+    }
+
     let imageUrl: string | null = existing.imageUrl;
     let imagePublicId: string | null = existing.imagePublicId;
 
@@ -121,7 +135,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
           imageUrl = null;
           imagePublicId = null;
         } catch (error) {
-          console.error("Failed to delete project image in Cloudinary", error);
+          //console.error("Failed to delete project image in Cloudinary", error);
           return NextResponse.json(
             { error: "Failed to delete existing image" },
             { status: 500 },
@@ -137,10 +151,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     const updated = await prisma.project.update({
       where: { id },
       data: {
-        title:
-          typeof title === "string" && title.trim().length > 0
-            ? title.trim()
-            : existing.title,
+        title: titleTrimmed,
         description:
           typeof description === "string"
             ? (description.trim() || null)
@@ -163,20 +174,20 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       try {
         await deleteImage(existing.imagePublicId);
       } catch (error) {
-        console.error("Failed to delete old project image in Cloudinary after update", error);
+        //console.error("Failed to delete old project image in Cloudinary after update", error);
       }
     }
 
     return NextResponse.json(updated);
   } catch (error) {
-    console.error("Failed to update project", error);
+    //console.error("Failed to update project", error);
 
     // Best-effort cleanup if a new image was uploaded but the DB update failed.
     if (newUploadedPublicId) {
       try {
         await deleteImage(newUploadedPublicId);
       } catch (cleanupError) {
-        console.error("Failed to cleanup newly uploaded image after DB error", cleanupError);
+        //console.error("Failed to cleanup newly uploaded image after DB error", cleanupError);
       }
     }
 
@@ -216,7 +227,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
       try {
         await deleteImage(existing.imagePublicId);
       } catch (error) {
-        console.error("Failed to delete project image in Cloudinary", error);
+        //console.error("Failed to delete project image in Cloudinary", error);
       }
     }
 
@@ -226,7 +237,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to delete project", error);
+    //console.error("Failed to delete project", error);
     return NextResponse.json(
       { error: "Failed to delete project" },
       { status: 500 },

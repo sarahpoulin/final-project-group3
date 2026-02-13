@@ -4,11 +4,21 @@
  * These tests verify filtering, ordering, and error behavior of the projects
  * listing endpoint. We mock authentication and Prisma so that the tests focus
  * purely on how the handler builds its Prisma query and shapes the response.
+ *
+ * Scenarios covered:
+ * - No filters: handler uses empty where and returns full list in created-desc order.
+ * - category / featured: query string is parsed and passed into the Prisma where clause.
+ * - Combined filters: both category and featured can be used together.
+ * - Empty results: handler returns 200 with an empty array when nothing matches.
+ * - Invalid or missing params: featured=invalid is treated as false; empty category
+ *   is ignored so the handler does not filter by category.
+ * - Server error: when the DB throws, handler returns 500 with a generic message.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GET } from "../route";
 import { prisma } from "@/lib/db";
 import type { ProjectApiResponse } from "@/types/project";
+import { mockProjects } from "./fixtures";
 
 // Mock auth to avoid pulling in next-auth/next during tests; the GET handler
 // is public, so auth is irrelevant for these scenarios.
@@ -30,75 +40,11 @@ describe("GET /api/projects", () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
-    // Mock projects data for testing
-    const mockProjects: ProjectApiResponse[] = [
-        {
-            id: "1",
-            title: "Oak Floor Refinishing - Downtown Condo",
-            description:
-                "Complete sanding and refinishing of original oak hardwood floors in a downtown residential condo.",
-            category: "Residential",
-            featured: true,
-            imageUrl:
-                "https://res.cloudinary.com/demo/image/upload/v1738791001/shoreline/projects/oak-condo.jpg",
-            imagePublicId: "shoreline/projects/oak-condo",
-            createdAt: "2026-02-06T10:15:00.000Z",
-            updatedAt: "2026-02-06T10:15:00.000Z",
-        },
-        {
-            id: "2",
-            title: "Maple Hardwood Installation - Family Home",
-            description:
-                "Installed new maple hardwood flooring throughout the main floor of a detached family home.",
-            category: "Residential",
-            featured: false,
-            imageUrl:
-                "https://res.cloudinary.com/demo/image/upload/v1738791201/shoreline/projects/maple-install.jpg",
-            imagePublicId: "shoreline/projects/maple-install",
-            createdAt: "2026-02-05T14:30:00.000Z",
-            updatedAt: "2026-02-05T14:30:00.000Z",
-        },
-        {
-            id: "3",
-            title: "Staircase Sanding & Staining",
-            description:
-                "Refinished residential staircase including sanding, staining, and protective polyurethane coating.",
-            category: "Residential",
-            featured: false,
-            imageUrl:
-                "https://res.cloudinary.com/demo/image/upload/v1738791401/shoreline/projects/staircase.jpg",
-            imagePublicId: "shoreline/projects/staircase",
-            createdAt: "2026-02-04T09:45:00.000Z",
-            updatedAt: "2026-02-04T09:45:00.000Z",
-        },
-        {
-            id: "4",
-            title: "Commercial Showroom Flooring",
-            description:
-                "Installed durable engineered hardwood flooring in a high-traffic commercial showroom space.",
-            category: "Commercial",
-            featured: false,
-            imageUrl:
-                "https://res.cloudinary.com/demo/image/upload/v1738791601/shoreline/projects/showroom.jpg",
-            imagePublicId: "shoreline/projects/showroom",
-            createdAt: "2026-02-03T16:20:00.000Z",
-            updatedAt: "2026-02-03T16:20:00.000Z",
-        },
-        {
-            id: "5",
-            title: "Gymnasium Floor Restoration",
-            description:
-                "Full restoration and sealing of a school gymnasium hardwood sports floor.",
-            category: "Institutional",
-            featured: false,
-            imageUrl:
-                "https://res.cloudinary.com/demo/image/upload/v1738791801/shoreline/projects/gym-floor.jpg",
-            imagePublicId: "shoreline/projects/gym-floor",
-            createdAt: "2026-02-02T11:10:00.000Z",
-            updatedAt: "2026-02-02T11:10:00.000Z",
-        },
-    ];
 
+    /**
+     * With no query string, the handler must pass an empty where clause and
+     * order by createdAt desc so the response is the full list in the correct order.
+     */
     it("should return a list of projects with no filters", async () => {
         (prisma.project.findMany as any).mockResolvedValue(mockProjects);
 
@@ -114,6 +60,10 @@ describe("GET /api/projects", () => {
         expect(body).toEqual(mockProjects);
     });
 
+    /**
+     * The category query param must be forwarded to Prisma so only projects
+     * in that category are returned; we assert both the where clause and the response.
+     */
     it("should return a list of projects filtered by category", async () => {
         const residentialProjects = mockProjects.filter(
             (project: ProjectApiResponse) => project.category === "Residential",
@@ -137,6 +87,10 @@ describe("GET /api/projects", () => {
         ).toBe(true);
     });
 
+    /**
+     * featured=true must be parsed as boolean true and passed to findMany so
+     * only featured projects are returned.
+     */
     it("should return a list containing only the featured project", async () => {
         const featuredProjects = mockProjects.filter(
             (project: ProjectApiResponse) => project.featured,
@@ -158,6 +112,10 @@ describe("GET /api/projects", () => {
         expect(body.length).toBe(1);
     });
 
+    /**
+     * featured=false must be parsed as boolean false so non-featured projects
+     * are returned (not an empty list or unfiltered list).
+     */
     it("should return a list containing only the non-featured projects", async () => {
         const nonFeaturedProjects = mockProjects.filter(
             (project: ProjectApiResponse) => !project.featured,
@@ -179,6 +137,10 @@ describe("GET /api/projects", () => {
         expect(body.length).toBe(mockProjects.length - 1);
     });
 
+    /**
+     * If Prisma throws (e.g. connection lost), the handler catches and returns
+     * 500 with a generic message so we don't leak internal details to the client.
+     */
     it("should return a 500 error if the database query fails", async () => {
         (prisma.project.findMany as any).mockRejectedValue(new Error("Database query failed"));
 
@@ -189,6 +151,10 @@ describe("GET /api/projects", () => {
         expect(await res.json()).toEqual({ error: "Failed to fetch projects" });
     });
 
+    /**
+     * Both category and featured can appear in the query string; the handler
+     * must include both in the where clause so results match all criteria.
+     */
     it("should return projects filtered by both category and featured", async () => {
         const featuredResidentialProjects = mockProjects.filter(
             (project: ProjectApiResponse) =>
@@ -215,6 +181,10 @@ describe("GET /api/projects", () => {
         expect(body.every((project: ProjectApiResponse) => project.featured === true)).toBe(true);
     });
 
+    /**
+     * When the filter matches no rows, the handler must return 200 with an
+     * empty array (not 404 or 500) so clients can distinguish "no results" from errors.
+     */
     it("should return an empty array when no projects match the filters", async () => {
         (prisma.project.findMany as any).mockResolvedValue([]);
 
@@ -232,6 +202,10 @@ describe("GET /api/projects", () => {
         expect(Array.isArray(body)).toBe(true);
     });
 
+    /**
+     * Non-boolean featured values (e.g. "invalid") must be treated as false so
+     * the API is robust to malformed query params and returns a safe default.
+     */
     it("should treat invalid featured value as false", async () => {
         const nonFeaturedProjects = mockProjects.filter(
             (project: ProjectApiResponse) => !project.featured,
@@ -251,6 +225,10 @@ describe("GET /api/projects", () => {
         expect(body).toEqual(nonFeaturedProjects);
     });
 
+    /**
+     * An empty category param (e.g. ?category=) must not add a filter; the
+     * handler should use an empty where so the full list is returned.
+     */
     it("should ignore empty category parameter", async () => {
         (prisma.project.findMany as any).mockResolvedValue(mockProjects);
 

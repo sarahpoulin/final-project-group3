@@ -35,7 +35,7 @@ export async function GET(req: Request) {
       where.category = category;
     }
 
-    if (featuredParam !== null) {
+    if (featuredParam !== null && featuredParam !== "") {
       where.featured = featuredParam === "true";
     }
 
@@ -149,7 +149,7 @@ export async function POST(req: Request) {
       try {
         await deleteImage(uploadedPublicId);
       } catch (cleanupError) {
-        console.error("Failed to cleanup uploaded image after DB error", cleanupError);
+        //console.error("Failed to cleanup uploaded image after DB error", cleanupError);
       }
     }
     return NextResponse.json(

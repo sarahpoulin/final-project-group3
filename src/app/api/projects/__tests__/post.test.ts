@@ -5,6 +5,15 @@
  * Prisma, and Cloudinary upload/cleanup behavior. We mock external services
  * (auth, database, and Cloudinary) so that the tests can run deterministically
  * without real network calls or a real database.
+ *
+ * Scenarios covered:
+ * - Success: valid payload with/without image; title-only payload; FormData
+ *   trimming and optional fields (description, category, featured) are correct.
+ * - Validation: missing or whitespace-only title → 400; invalid image type (e.g. SVG)
+ *   or image over 10MB → 400 with specific error messages.
+ * - Auth: requireAdmin is called; 401 when no/invalid session; 403 when not admin.
+ * - Errors: Cloudinary upload failure → 500; DB create failure after upload →
+ *   500 and deleteImage is called to clean up the uploaded asset.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { POST } from "../route";
@@ -16,587 +25,633 @@ import type { ProjectApiResponse } from "@/types/project";
 // Mock auth guard used by the POST handler so we can simulate different
 // authorization outcomes (admin, non-admin, unauthenticated) in isolation.
 vi.mock("@/lib/auth-guards", () => ({
-  requireAdmin: vi.fn(),
+    requireAdmin: vi.fn(),
 }));
 
 // Mock the Prisma client so that route tests never depend on a live database.
 vi.mock("@/lib/db", () => ({
-  prisma: {
-    project: {
-      create: vi.fn(),
+    prisma: {
+        project: {
+            create: vi.fn(),
+        },
     },
-  },
 }));
 
 // Mock Cloudinary helpers so tests avoid real image uploads/deletions and only
 // assert that the route calls them with the correct arguments.
 vi.mock("@/lib/cloudinary", () => ({
-  uploadImage: vi.fn(),
-  deleteImage: vi.fn(),
+    uploadImage: vi.fn(),
+    deleteImage: vi.fn(),
 }));
 
 describe("POST /api/projects", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("successfully creates a new project with a valid payload and no image", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
+    beforeEach(() => {
+        vi.clearAllMocks();
     });
 
-    const createdProject: ProjectApiResponse = {
-      id: "proj_1",
-      title: "New Project",
-      description: "A brand new project",
-      category: "Residential",
-      featured: true,
-      imageUrl: null,
-      imagePublicId: null,
-      createdAt: "2026-02-12T10:00:00.000Z",
-      updatedAt: "2026-02-12T10:00:00.000Z",
-    };
+    /**
+     * With admin granted and valid FormData (title trimmed, optional fields present),
+     * the handler must call create with the correct data and return 201 and the created project.
+     */
+    it("successfully creates a new project with a valid payload and no image", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
+        const createdProject: ProjectApiResponse = {
+            id: "proj_1",
+            title: "New Project",
+            description: "A brand new project",
+            category: "Residential",
+            featured: true,
+            imageUrl: null,
+            imagePublicId: null,
+            createdAt: "2026-02-12T10:00:00.000Z",
+            updatedAt: "2026-02-12T10:00:00.000Z",
+        };
 
-    const formData = new FormData();
-    // Intentionally include surrounding whitespace to verify trimming
-    formData.set("title", "   New Project   ");
-    formData.set("description", "A brand new project");
-    formData.set("category", "Residential");
-    formData.set("featured", "true");
+        (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
 
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
+        const formData = new FormData();
+        // Intentionally include surrounding whitespace to verify trimming
+        formData.set("title", "   New Project   ");
+        formData.set("description", "A brand new project");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
+
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+
+        expect(prisma.project.create).toHaveBeenCalledWith({
+            data: {
+                title: "New Project",
+                description: "A brand new project",
+                category: "Residential",
+                featured: true,
+                imageUrl: null,
+                imagePublicId: null,
+            },
+        });
+
+        expect(res.status).toBe(201);
+        const body = await res.json();
+        expect(body).toEqual(createdProject);
     });
 
-    const res = await POST(req);
+    /**
+     * When a valid image file (allowed type and size) is included, the handler must
+     * call uploadImage, then create with the returned URL and publicId, and return 201.
+     */
+    it("successfully creates a new project with a valid jpeg image", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    expect(requireAdmin).toHaveBeenCalledWith(req);
+        const uploaded = {
+            publicId: "projects/img-123",
+            secureUrl: "https://res.cloudinary.com/demo/image/upload/v1/projects/img-123.jpg",
+            width: 1024,
+            height: 768,
+            format: "jpg",
+        };
 
-    expect(prisma.project.create).toHaveBeenCalledWith({
-      data: {
-        title: "New Project",
-        description: "A brand new project",
-        category: "Residential",
-        featured: true,
-        imageUrl: null,
-        imagePublicId: null,
-      },
-    });
+        (uploadImage as unknown as any).mockResolvedValue(uploaded);
 
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body).toEqual(createdProject);
-  });
+        const createdProject: ProjectApiResponse = {
+            id: "proj_img_1",
+            title: "Image Project",
+            description: "Project with a valid jpeg image",
+            category: "Residential",
+            featured: true,
+            imageUrl: uploaded.secureUrl,
+            imagePublicId: uploaded.publicId,
+            createdAt: "2026-02-12T12:00:00.000Z",
+            updatedAt: "2026-02-12T12:00:00.000Z",
+        };
 
-  it("successfully creates a new project with a valid jpeg image", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
-    });
+        (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
 
-    const uploaded = {
-      publicId: "projects/img-123",
-      secureUrl: "https://res.cloudinary.com/demo/image/upload/v1/projects/img-123.jpg",
-      width: 1024,
-      height: 768,
-      format: "jpg",
-    };
-
-    (uploadImage as unknown as any).mockResolvedValue(uploaded);
-
-    const createdProject: ProjectApiResponse = {
-      id: "proj_img_1",
-      title: "Image Project",
-      description: "Project with a valid jpeg image",
-      category: "Residential",
-      featured: true,
-      imageUrl: uploaded.secureUrl,
-      imagePublicId: uploaded.publicId,
-      createdAt: "2026-02-12T12:00:00.000Z",
-      updatedAt: "2026-02-12T12:00:00.000Z",
-    };
-
-    (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
-
-    class JpegFakeFile {
-      size: number;
-      type: string;
-      constructor(size: number, type: string) {
-        this.size = size;
-        this.type = type;
-      }
-      async arrayBuffer(): Promise<ArrayBuffer> {
-        return new ArrayBuffer(0);
-      }
-    }
-
-    const jpegFile = new JpegFakeFile(1024, "image/jpeg");
-
-    const originalFile = (globalThis as any).File;
-    (globalThis as any).File = JpegFakeFile as any;
-
-    const fakeFormData = {
-      get(key: string) {
-        switch (key) {
-          case "title":
-            return "Image Project";
-          case "description":
-            return "Project with a valid jpeg image";
-          case "category":
-            return "Residential";
-          case "featured":
-            return "true";
-          case "image":
-            return jpegFile;
-          default:
-            return null;
+        class JpegFakeFile {
+            size: number;
+            type: string;
+            constructor(size: number, type: string) {
+                this.size = size;
+                this.type = type;
+            }
+            async arrayBuffer(): Promise<ArrayBuffer> {
+                return new ArrayBuffer(0);
+            }
         }
-      },
-    };
 
-    const req = {
-      formData: async () => fakeFormData,
-    } as unknown as Request;
+        const jpegFile = new JpegFakeFile(1024, "image/jpeg");
 
-    const res = await POST(req);
+        const originalFile = (globalThis as any).File;
+        (globalThis as any).File = JpegFakeFile as any;
 
-    (globalThis as any).File = originalFile;
+        const fakeFormData = {
+            get(key: string) {
+                switch (key) {
+                    case "title":
+                        return "Image Project";
+                    case "description":
+                        return "Project with a valid jpeg image";
+                    case "category":
+                        return "Residential";
+                    case "featured":
+                        return "true";
+                    case "image":
+                        return jpegFile;
+                    default:
+                        return null;
+                }
+            },
+        };
 
-    expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
-    expect(uploadImage).toHaveBeenCalledTimes(1);
-    expect(prisma.project.create).toHaveBeenCalledWith({
-      data: {
-        title: "Image Project",
-        description: "Project with a valid jpeg image",
-        category: "Residential",
-        featured: true,
-        imageUrl: uploaded.secureUrl,
-        imagePublicId: uploaded.publicId,
-      },
+        const req = {
+            formData: async () => fakeFormData,
+        } as unknown as Request;
+
+        const res = await POST(req);
+
+        (globalThis as any).File = originalFile;
+
+        expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
+        expect(uploadImage).toHaveBeenCalledTimes(1);
+        expect(prisma.project.create).toHaveBeenCalledWith({
+            data: {
+                title: "Image Project",
+                description: "Project with a valid jpeg image",
+                category: "Residential",
+                featured: true,
+                imageUrl: uploaded.secureUrl,
+                imagePublicId: uploaded.publicId,
+            },
+        });
+
+        expect(res.status).toBe(201);
+        const body = await res.json();
+        expect(body).toEqual(createdProject);
     });
 
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body).toEqual(createdProject);
-  });
+    /**
+     * Optional fields (description, category, featured, image) can be omitted; the
+     * handler must pass null/false and still return the created project with imageUrl
+     * and imagePublicId present (as null).
+     */
+    it("successfully creates a new project when only title is provided", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-  it("successfully creates a new project when only title is provided", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
+        const createdProject: ProjectApiResponse = {
+            id: "proj_2",
+            title: "Title Only Project",
+            description: null,
+            category: null,
+            featured: false,
+            imageUrl: null,
+            imagePublicId: null,
+            createdAt: "2026-02-12T11:00:00.000Z",
+            updatedAt: "2026-02-12T11:00:00.000Z",
+        };
+
+        (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
+
+        const formData = new FormData();
+        formData.set("title", "Title Only Project");
+
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
+
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+
+        expect(prisma.project.create).toHaveBeenCalledWith({
+            data: {
+                title: "Title Only Project",
+                description: null,
+                category: null,
+                featured: false,
+                imageUrl: null,
+                imagePublicId: null,
+            },
+        });
+
+        expect(res.status).toBe(201);
+        const body = await res.json();
+        expect(body).toEqual(createdProject);
+        expect("imageUrl" in body).toBe(true);
+        expect("imagePublicId" in body).toBe(true);
     });
 
-    const createdProject: ProjectApiResponse = {
-      id: "proj_2",
-      title: "Title Only Project",
-      description: null,
-      category: null,
-      featured: false,
-      imageUrl: null,
-      imagePublicId: null,
-      createdAt: "2026-02-12T11:00:00.000Z",
-      updatedAt: "2026-02-12T11:00:00.000Z",
-    };
+    /**
+     * Title is required; when it is absent from FormData the handler must return
+     * 400 with a clear error and must not call create.
+     */
+    it("returns 400 when title is missing", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    (prisma.project.create as unknown as any).mockResolvedValue(createdProject);
+        const formData = new FormData();
+        // Intentionally do NOT set "title"
+        formData.set("description", "Missing title");
 
-    const formData = new FormData();
-    formData.set("title", "Title Only Project");
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Title is required" });
     });
 
-    const res = await POST(req);
+    /**
+     * A title that is only whitespace after trim must be rejected like a missing
+     * title so we do not create projects with empty titles.
+     */
+    it("returns 400 when title is only whitespace", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    expect(requireAdmin).toHaveBeenCalledWith(req);
+        const formData = new FormData();
+        formData.set("title", "   "); // whitespace only
+        formData.set("description", "Whitespace title");
 
-    expect(prisma.project.create).toHaveBeenCalledWith({
-      data: {
-        title: "Title Only Project",
-        description: null,
-        category: null,
-        featured: false,
-        imageUrl: null,
-        imagePublicId: null,
-      },
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
+
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Title is required" });
     });
 
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body).toEqual(createdProject);
-    expect("imageUrl" in body).toBe(true);
-    expect("imagePublicId" in body).toBe(true);
-  });
+    /**
+     * When requireAdmin returns not ok (e.g. no session or invalid cookie), the
+     * handler must return 401 Unauthorized and must not create a project.
+     */
+    it("returns 401 when the session is missing or invalid", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: false,
+            session: null,
+            response: new Response(JSON.stringify({ error: "Unauthorized" }), {
+                status: 401,
+                headers: { "Content-Type": "application/json" },
+            }),
+        });
 
-  it("returns 400 when title is missing", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
+        const formData = new FormData();
+        formData.set("title", "Some Project");
+
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
+
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(401);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Unauthorized" });
     });
 
-    const formData = new FormData();
-    // Intentionally do NOT set "title"
-    formData.set("description", "Missing title");
+    /**
+     * When the user is logged in but not an admin, the handler must return 403
+     * Forbidden and must not create a project.
+     */
+    it("returns 403 when the user is authenticated but not an admin", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: false,
+            session: {},
+            response: new Response(JSON.stringify({ error: "Forbidden" }), {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+            }),
+        });
 
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
+        const formData = new FormData();
+        formData.set("title", "Some Project");
+
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
+
+        const res = await POST(req);
+
+        expect(requireAdmin).toHaveBeenCalledWith(req);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(403);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Forbidden" });
     });
 
-    const res = await POST(req);
+    /**
+     * Only allowed image types (jpeg, jpg, png, webp, gif) are accepted; e.g. SVG
+     * must be rejected with 400 and the documented allowed-types error message.
+     */
+    it("returns 400 when image has an invalid svg mime type", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    expect(requireAdmin).toHaveBeenCalledWith(req);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Title is required" });
-  });
-
-  it("returns 400 when title is only whitespace", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
-    });
-
-    const formData = new FormData();
-    formData.set("title", "   "); // whitespace only
-    formData.set("description", "Whitespace title");
-
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
-    });
-
-    const res = await POST(req);
-
-    expect(requireAdmin).toHaveBeenCalledWith(req);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Title is required" });
-  });
-
-  it("returns 401 when the session is missing or invalid", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: false,
-      session: null,
-      response: new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    });
-
-    const formData = new FormData();
-    formData.set("title", "Some Project");
-
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
-    });
-
-    const res = await POST(req);
-
-    expect(requireAdmin).toHaveBeenCalledWith(req);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Unauthorized" });
-  });
-
-  it("returns 403 when the user is authenticated but not an admin", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: false,
-      session: {},
-      response: new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-      }),
-    });
-
-    const formData = new FormData();
-    formData.set("title", "Some Project");
-
-    const req = new Request("http://localhost/api/projects", {
-      method: "POST",
-      body: formData,
-    });
-
-    const res = await POST(req);
-
-    expect(requireAdmin).toHaveBeenCalledWith(req);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Forbidden" });
-  });
-
-  it("returns 400 when image has an invalid svg mime type", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
-    });
-
-    class FakeFile {
-      size: number;
-      type: string;
-      constructor(size: number, type: string) {
-        this.size = size;
-        this.type = type;
-      }
-      async arrayBuffer(): Promise<ArrayBuffer> {
-        return new ArrayBuffer(0);
-      }
-    }
-
-    const svgFile = new FakeFile(10, "image/svg+xml");
-
-    const originalFile = (globalThis as any).File;
-    (globalThis as any).File = FakeFile as any;
-
-    const fakeFormData = {
-      get(key: string) {
-        switch (key) {
-          case "title":
-            return "Project With SVG Image";
-          case "description":
-            return "Has an invalid SVG image";
-          case "category":
-            return "Residential";
-          case "featured":
-            return "true";
-          case "image":
-            return svgFile;
-          default:
-            return null;
+        class FakeFile {
+            size: number;
+            type: string;
+            constructor(size: number, type: string) {
+                this.size = size;
+                this.type = type;
+            }
+            async arrayBuffer(): Promise<ArrayBuffer> {
+                return new ArrayBuffer(0);
+            }
         }
-      },
-    };
 
-    const req = {
-      formData: async () => fakeFormData,
-    } as unknown as Request;
+        const svgFile = new FakeFile(10, "image/svg+xml");
 
-    const res = await POST(req);
+        const originalFile = (globalThis as any).File;
+        (globalThis as any).File = FakeFile as any;
 
-    // Restore original File constructor after the handler runs.
-    (globalThis as any).File = originalFile;
+        const fakeFormData = {
+            get(key: string) {
+                switch (key) {
+                    case "title":
+                        return "Project With SVG Image";
+                    case "description":
+                        return "Has an invalid SVG image";
+                    case "category":
+                        return "Residential";
+                    case "featured":
+                        return "true";
+                    case "image":
+                        return svgFile;
+                    default:
+                        return null;
+                }
+            },
+        };
 
-    expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body).toEqual({
-      error:
-        "Invalid image type. Allowed: image/jpeg, image/jpg, image/png, image/webp, image/gif",
+        const req = {
+            formData: async () => fakeFormData,
+        } as unknown as Request;
+
+        const res = await POST(req);
+
+        // Restore original File constructor after the handler runs.
+        (globalThis as any).File = originalFile;
+
+        expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body).toEqual({
+            error:
+                "Invalid image type. Allowed: image/jpeg, image/jpg, image/png, image/webp, image/gif",
+        });
     });
-  });
 
-  it("returns 400 when image file is larger than 10MB", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
-    });
+    /**
+     * Images over 10MB must be rejected with 400 and a size-limit error so we
+     * avoid uploading oversized files to Cloudinary.
+     */
+    it("returns 400 when image file is larger than 10MB", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    class LargeFakeFile {
-      size: number;
-      type: string;
-      constructor(size: number, type: string) {
-        this.size = size;
-        this.type = type;
-      }
-      async arrayBuffer(): Promise<ArrayBuffer> {
-        return new ArrayBuffer(0);
-      }
-    }
-
-    const largeFile = new LargeFakeFile(10 * 1024 * 1024 + 1, "image/jpeg");
-
-    const originalFile = (globalThis as any).File;
-    (globalThis as any).File = LargeFakeFile as any;
-
-    const fakeFormData = {
-      get(key: string) {
-        switch (key) {
-          case "title":
-            return "Project With Large Image";
-          case "description":
-            return "Has an oversized image";
-          case "category":
-            return "Residential";
-          case "featured":
-            return "true";
-          case "image":
-            return largeFile;
-          default:
-            return null;
+        class LargeFakeFile {
+            size: number;
+            type: string;
+            constructor(size: number, type: string) {
+                this.size = size;
+                this.type = type;
+            }
+            async arrayBuffer(): Promise<ArrayBuffer> {
+                return new ArrayBuffer(0);
+            }
         }
-      },
-    };
 
-    const req = {
-      formData: async () => fakeFormData,
-    } as unknown as Request;
+        const largeFile = new LargeFakeFile(10 * 1024 * 1024 + 1, "image/jpeg");
 
-    const res = await POST(req);
+        const originalFile = (globalThis as any).File;
+        (globalThis as any).File = LargeFakeFile as any;
 
-    (globalThis as any).File = originalFile;
+        const fakeFormData = {
+            get(key: string) {
+                switch (key) {
+                    case "title":
+                        return "Project With Large Image";
+                    case "description":
+                        return "Has an oversized image";
+                    case "category":
+                        return "Residential";
+                    case "featured":
+                        return "true";
+                    case "image":
+                        return largeFile;
+                    default:
+                        return null;
+                }
+            },
+        };
 
-    expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body).toEqual({
-      error: "Image file is too large (max 10MB)",
+        const req = {
+            formData: async () => fakeFormData,
+        } as unknown as Request;
+
+        const res = await POST(req);
+
+        (globalThis as any).File = originalFile;
+
+        expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body).toEqual({
+            error: "Image file is too large (max 10MB)",
+        });
     });
-  });
 
-  it("returns 500 when Cloudinary upload fails", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
-    });
+    /**
+     * If uploadImage throws (e.g. Cloudinary unreachable), the handler must return
+     * 500 with a generic message and must not call create (no orphan DB record).
+     */
+    it("returns 500 when Cloudinary upload fails", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    (uploadImage as unknown as any).mockRejectedValue(
-      new Error("Cloudinary upload failed"),
-    );
+        (uploadImage as unknown as any).mockRejectedValue(
+            new Error("Cloudinary upload failed"),
+        );
 
-    class FailingUploadFile {
-      size: number;
-      type: string;
-      constructor(size: number, type: string) {
-        this.size = size;
-        this.type = type;
-      }
-      async arrayBuffer(): Promise<ArrayBuffer> {
-        return new ArrayBuffer(0);
-      }
-    }
-
-    const jpegFile = new FailingUploadFile(1024, "image/jpeg");
-
-    const originalFile = (globalThis as any).File;
-    (globalThis as any).File = FailingUploadFile as any;
-
-    const fakeFormData = {
-      get(key: string) {
-        switch (key) {
-          case "title":
-            return "Project With Failing Upload";
-          case "description":
-            return "Cloudinary should fail during upload";
-          case "category":
-            return "Residential";
-          case "featured":
-            return "true";
-          case "image":
-            return jpegFile;
-          default:
-            return null;
+        class FailingUploadFile {
+            size: number;
+            type: string;
+            constructor(size: number, type: string) {
+                this.size = size;
+                this.type = type;
+            }
+            async arrayBuffer(): Promise<ArrayBuffer> {
+                return new ArrayBuffer(0);
+            }
         }
-      },
-    };
 
-    const req = {
-      formData: async () => fakeFormData,
-    } as unknown as Request;
+        const jpegFile = new FailingUploadFile(1024, "image/jpeg");
 
-    const res = await POST(req);
+        const originalFile = (globalThis as any).File;
+        (globalThis as any).File = FailingUploadFile as any;
 
-    (globalThis as any).File = originalFile;
+        const fakeFormData = {
+            get(key: string) {
+                switch (key) {
+                    case "title":
+                        return "Project With Failing Upload";
+                    case "description":
+                        return "Cloudinary should fail during upload";
+                    case "category":
+                        return "Residential";
+                    case "featured":
+                        return "true";
+                    case "image":
+                        return jpegFile;
+                    default:
+                        return null;
+                }
+            },
+        };
 
-    expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
-    expect(prisma.project.create).not.toHaveBeenCalled();
-    expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Failed to create project" });
-  });
+        const req = {
+            formData: async () => fakeFormData,
+        } as unknown as Request;
 
-  it("returns 500 and cleans up uploaded image when database create fails", async () => {
-    (requireAdmin as unknown as any).mockResolvedValue({
-      ok: true,
-      session: {},
-      response: null,
+        const res = await POST(req);
+
+        (globalThis as any).File = originalFile;
+
+        expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
+        expect(prisma.project.create).not.toHaveBeenCalled();
+        expect(res.status).toBe(500);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Failed to create project" });
     });
 
-    const uploaded = {
-      publicId: "projects/img-db-fail",
-      secureUrl: "https://res.cloudinary.com/demo/image/upload/v1/projects/img-db-fail.jpg",
-      width: 800,
-      height: 600,
-      format: "jpg",
-    };
+    /**
+     * If create fails after a successful upload, the handler must return 500 and
+     * call deleteImage with the uploaded publicId so we do not leave orphan assets
+     * in Cloudinary.
+     */
+    it("returns 500 and cleans up uploaded image when database create fails", async () => {
+        (requireAdmin as unknown as any).mockResolvedValue({
+            ok: true,
+            session: {},
+            response: null,
+        });
 
-    (uploadImage as unknown as any).mockResolvedValue(uploaded);
-    (prisma.project.create as unknown as any).mockRejectedValue(
-      new Error("Database create failed"),
-    );
+        const uploaded = {
+            publicId: "projects/img-db-fail",
+            secureUrl: "https://res.cloudinary.com/demo/image/upload/v1/projects/img-db-fail.jpg",
+            width: 800,
+            height: 600,
+            format: "jpg",
+        };
 
-    const deleteImageMock = deleteImage as unknown as ReturnType<typeof vi.fn>;
+        (uploadImage as unknown as any).mockResolvedValue(uploaded);
+        (prisma.project.create as unknown as any).mockRejectedValue(
+            new Error("Database create failed"),
+        );
 
-    class DbFailFile {
-      size: number;
-      type: string;
-      constructor(size: number, type: string) {
-        this.size = size;
-        this.type = type;
-      }
-      async arrayBuffer(): Promise<ArrayBuffer> {
-        return new ArrayBuffer(0);
-      }
-    }
+        const deleteImageMock = deleteImage as unknown as ReturnType<typeof vi.fn>;
 
-    const jpegFile = new DbFailFile(1024, "image/jpeg");
-
-    const originalFile = (globalThis as any).File;
-    (globalThis as any).File = DbFailFile as any;
-
-    const fakeFormData = {
-      get(key: string) {
-        switch (key) {
-          case "title":
-            return "Project With DB Failure";
-          case "description":
-            return "DB create should fail after upload";
-          case "category":
-            return "Residential";
-          case "featured":
-            return "true";
-          case "image":
-            return jpegFile;
-          default:
-            return null;
+        class DbFailFile {
+            size: number;
+            type: string;
+            constructor(size: number, type: string) {
+                this.size = size;
+                this.type = type;
+            }
+            async arrayBuffer(): Promise<ArrayBuffer> {
+                return new ArrayBuffer(0);
+            }
         }
-      },
-    };
 
-    const req = {
-      formData: async () => fakeFormData,
-    } as unknown as Request;
+        const jpegFile = new DbFailFile(1024, "image/jpeg");
 
-    const res = await POST(req);
+        const originalFile = (globalThis as any).File;
+        (globalThis as any).File = DbFailFile as any;
 
-    (globalThis as any).File = originalFile;
+        const fakeFormData = {
+            get(key: string) {
+                switch (key) {
+                    case "title":
+                        return "Project With DB Failure";
+                    case "description":
+                        return "DB create should fail after upload";
+                    case "category":
+                        return "Residential";
+                    case "featured":
+                        return "true";
+                    case "image":
+                        return jpegFile;
+                    default:
+                        return null;
+                }
+            },
+        };
 
-    expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
-    expect(uploadImage).toHaveBeenCalledTimes(1);
-    expect(prisma.project.create).toHaveBeenCalledTimes(1);
-    expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Failed to create project" });
-    expect(deleteImageMock).toHaveBeenCalledWith(uploaded.publicId);
-  });
+        const req = {
+            formData: async () => fakeFormData,
+        } as unknown as Request;
+
+        const res = await POST(req);
+
+        (globalThis as any).File = originalFile;
+
+        expect(requireAdmin).toHaveBeenCalledWith(req as unknown as Request);
+        expect(uploadImage).toHaveBeenCalledTimes(1);
+        expect(prisma.project.create).toHaveBeenCalledTimes(1);
+        expect(res.status).toBe(500);
+        const body = await res.json();
+        expect(body).toEqual({ error: "Failed to create project" });
+        expect(deleteImageMock).toHaveBeenCalledWith(uploaded.publicId);
+    });
 });
