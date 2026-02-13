@@ -61,7 +61,7 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   // 1. Require authentication and verify user has isAdmin: true (from session, populated from DB in auth callback)
-  const adminResult = await requireAdmin(req);
+  const adminResult = await requireAdmin();
   if (!adminResult.ok) {
     return adminResult.response;
   }

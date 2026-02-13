@@ -57,11 +57,8 @@ const getSession = async (
  * On success returns `{ ok: true, session }`, otherwise `{ ok: false, response }`
  * with an appropriate 401/403 response.
  */
-export async function requireAdmin(
-  request?: Request,
-  ctx?: AuthContext,
-): Promise<RequireAdminResult> {
-  const session = await getSession(request, ctx);
+export async function requireAdmin(): Promise<RequireAdminResult> {
+  const session = await auth();
 
   if (!session) {
     // console.error("[requireAdmin] 401: no session (missing or invalid cookie)");
@@ -95,26 +92,6 @@ export async function requireAdmin(
         session,
         response: null,
       };
-    }
-  }
-
-  if (request) {
-    const sessionToken = getSessionTokenFromRequest(request);
-    if (sessionToken) {
-      const dbSession = await prisma.session.findUnique({
-        where: { sessionToken },
-        select: {
-          expires: true,
-          user: { select: { isAdmin: true } },
-        },
-      });
-      if (dbSession && dbSession.expires > new Date() && dbSession.user?.isAdmin) {
-        return {
-          ok: true,
-          session,
-          response: null,
-        };
-      }
     }
   }
 
@@ -207,4 +184,3 @@ export async function verifyAdmin(
     response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
   };
 }
-
