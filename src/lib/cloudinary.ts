@@ -17,13 +17,33 @@ export interface SignedUploadParams {
   folder: string;
 }
 
+/** Default Cloudinary folder when no project-specific folder is used. */
+export const DEFAULT_PROJECTS_FOLDER = "projects";
+
+/**
+ * Generate a unique Cloudinary folder path for a new project, based on creation date/time.
+ * Format: projects/YYYYMMDD-HHmmss (e.g., projects/20260213-214530).
+ */
+export function generateProjectFolder(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const h = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  const s = String(now.getSeconds()).padStart(2, "0");
+  return `${DEFAULT_PROJECTS_FOLDER}/${y}${m}${d}-${h}${min}${s}`;
+}
+
 /**
  * Generate signed upload parameters for client-side uploads. The client uses
  * these with the file in a POST to Cloudinary; the signature proves the upload
  * was authorized by your server. Safe to call per batch of uploads (same params
  * can be used for multiple files within a short period).
+ *
+ * @param folder - Optional Cloudinary folder path. Defaults to "projects".
  */
-export function getSignedUploadParams(): SignedUploadParams {
+export function getSignedUploadParams(folder?: string): SignedUploadParams {
   const config = cloudinary.config();
   const cloudName = config?.cloud_name;
   const apiKey = config?.api_key;
@@ -31,14 +51,14 @@ export function getSignedUploadParams(): SignedUploadParams {
   if (!cloudName || !apiKey || !apiSecret) {
     throw new Error("Cloudinary is not configured (CLOUDINARY_URL)");
   }
-  const folder = "projects";
+  const targetFolder = folder ?? DEFAULT_PROJECTS_FOLDER;
   const timestamp = Math.round(Date.now() / 1000);
-  const paramsToSign = { folder, timestamp };
+  const paramsToSign = { folder: targetFolder, timestamp };
   const signature = (cloudinary.utils as { api_sign_request: (params: Record<string, unknown>, secret: string) => string }).api_sign_request(
     paramsToSign,
     apiSecret,
   );
-  return { cloudName, apiKey, timestamp, signature, folder };
+  return { cloudName, apiKey, timestamp, signature, folder: targetFolder };
 }
 
 /**
@@ -67,6 +87,9 @@ type UploadOptions = {
   folder?: string;
 };
 
+/** @internal Default folder when none provided. */
+const DEFAULT_UPLOAD_FOLDER = DEFAULT_PROJECTS_FOLDER;
+
 /**
  * Upload an image to Cloudinary.
  *
@@ -77,7 +100,7 @@ export async function uploadImage(
   file: string | Buffer,
   options: UploadOptions = {},
 ): Promise<UploadResult> {
-  const { transformation, publicId, folder = "projects" } = options;
+  const { transformation, publicId, folder = DEFAULT_UPLOAD_FOLDER } = options;
 
   if (typeof file === "string") {
     try {
@@ -146,6 +169,20 @@ export async function deleteImage(publicId: string): Promise<void> {
   await cloudinary.uploader.destroy(publicId, {
     resource_type: "image",
   });
+}
+
+/**
+ * Delete an empty folder from Cloudinary. The folder must not contain any assets.
+ * No-op when `folder` is falsy or equals the root projects folder ("projects").
+ *
+ * @param folder - Full folder path (e.g. "projects/20260213-120000")
+ */
+export async function deleteFolder(folder: string | null | undefined): Promise<void> {
+  if (!folder || !folder.trim()) return;
+  const trimmed = folder.trim();
+  if (trimmed === DEFAULT_PROJECTS_FOLDER) return;
+
+  await cloudinary.api.delete_folder(trimmed);
 }
 
 /**

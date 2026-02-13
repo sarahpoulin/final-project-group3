@@ -1,4 +1,5 @@
 /**
+ * @vitest-environment node
  * Tests for the `POST /api/projects` route handler.
  *
  * These integration-style tests focus on request validation, interaction with
@@ -22,9 +23,6 @@ import { requireAdmin } from "@/lib/auth-guards";
 import { uploadImage, deleteImage } from "@/lib/cloudinary";
 import type { ProjectApiResponse } from "@/types/project";
 
-/** Type for globalThis when temporarily replacing the File constructor in tests. */
-type GlobalWithFile = { File?: unknown };
-
 // Mock auth guard used by the POST handler so we can simulate different
 // authorization outcomes (admin, non-admin, unauthenticated) in isolation.
 vi.mock("@/lib/auth-guards", () => ({
@@ -45,6 +43,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/cloudinary", () => ({
     uploadImage: vi.fn(),
     deleteImage: vi.fn(),
+    generateProjectFolder: vi.fn(() => "projects/20260213-120000"),
 }));
 
 describe("POST /api/projects", () => {
@@ -118,69 +117,35 @@ describe("POST /api/projects", () => {
 
         (prisma.project.create as ReturnType<typeof vi.fn>).mockResolvedValue(createdProject);
 
-        class JpegFakeFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
+            type: "image/jpeg",
+        });
 
-        const jpegFile = new JpegFakeFile(1024, "image/jpeg");
+        const formData = new FormData();
+        formData.set("title", "Image Project");
+        formData.set("description", "Project with a valid jpeg image");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", jpegFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = JpegFakeFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Image Project";
-                    case "description":
-                        return "Project with a valid jpeg image";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [jpegFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(uploadImage).toHaveBeenCalledTimes(1);
         expect(prisma.project.create).toHaveBeenCalledWith({
-            data: {
+            data: expect.objectContaining({
                 title: "Image Project",
                 description: "Project with a valid jpeg image",
                 category: "Residential",
                 featured: true,
                 imageUrl: uploaded.secureUrl,
                 imagePublicId: uploaded.publicId,
+                cloudinaryFolder: expect.any(String),
                 images: {
                     create: [
                         {
@@ -190,10 +155,14 @@ describe("POST /api/projects", () => {
                         },
                     ],
                 },
-            },
+            }),
             include: { images: { orderBy: { sortOrder: "asc" } } },
         });
 
+        expect(uploadImage).toHaveBeenCalledWith(
+            expect.any(Buffer),
+            expect.objectContaining({ folder: expect.any(String) }),
+        );
         expect(res.status).toBe(201);
         const body = await res.json();
         expect(body).toEqual(createdProject);
@@ -388,59 +357,23 @@ describe("POST /api/projects", () => {
             response: null,
         });
 
-        class FakeFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const svgFile = new File([new Uint8Array(10)], "test.svg", {
+            type: "image/svg+xml",
+        });
 
-        const svgFile = new FakeFile(10, "image/svg+xml");
+        const formData = new FormData();
+        formData.set("title", "Project With SVG Image");
+        formData.set("description", "Has an invalid SVG image");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", svgFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = FakeFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Project With SVG Image";
-                    case "description":
-                        return "Has an invalid SVG image";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [svgFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        // Restore original File constructor after the handler runs.
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(prisma.project.create).not.toHaveBeenCalled();
@@ -463,58 +396,25 @@ describe("POST /api/projects", () => {
             response: null,
         });
 
-        class LargeFakeFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const largeFile = new File(
+            [new Uint8Array(10 * 1024 * 1024 + 1)],
+            "large.jpg",
+            { type: "image/jpeg" },
+        );
 
-        const largeFile = new LargeFakeFile(10 * 1024 * 1024 + 1, "image/jpeg");
+        const formData = new FormData();
+        formData.set("title", "Project With Large Image");
+        formData.set("description", "Has an oversized image");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", largeFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = LargeFakeFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Project With Large Image";
-                    case "description":
-                        return "Has an oversized image";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [largeFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(prisma.project.create).not.toHaveBeenCalled();
@@ -534,58 +434,23 @@ describe("POST /api/projects", () => {
             new Error("Cloudinary upload failed"),
         );
 
-        class FakeFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
+            type: "image/jpeg",
+        });
 
-        const jpegFile = new FakeFile(1024, "image/jpeg");
+        const formData = new FormData();
+        formData.set("title", "Image Project");
+        formData.set("description", "Project with image");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", jpegFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = FakeFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Image Project";
-                    case "description":
-                        return "Project with image";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [jpegFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalledWith();
         expect(prisma.project.create).not.toHaveBeenCalled();
@@ -609,58 +474,23 @@ describe("POST /api/projects", () => {
             new Error("Cloudinary upload failed"),
         );
 
-        class FailingUploadFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
+            type: "image/jpeg",
+        });
 
-        const jpegFile = new FailingUploadFile(1024, "image/jpeg");
+        const formData = new FormData();
+        formData.set("title", "Project With Failing Upload");
+        formData.set("description", "Cloudinary should fail during upload");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", jpegFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = FailingUploadFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Project With Failing Upload";
-                    case "description":
-                        return "Cloudinary should fail during upload";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [jpegFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(prisma.project.create).not.toHaveBeenCalled();
@@ -696,58 +526,23 @@ describe("POST /api/projects", () => {
 
         const deleteImageMock = deleteImage as unknown as ReturnType<typeof vi.fn>;
 
-        class DbFailFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
+            type: "image/jpeg",
+        });
 
-        const jpegFile = new DbFailFile(1024, "image/jpeg");
+        const formData = new FormData();
+        formData.set("title", "Project With DB Failure");
+        formData.set("description", "DB create should fail after upload");
+        formData.set("category", "Residential");
+        formData.set("featured", "true");
+        formData.append("image", jpegFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = DbFailFile;
-
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Project With DB Failure";
-                    case "description":
-                        return "DB create should fail after upload";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [jpegFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formData,
+        });
 
         const res = await POST(req);
-
-        g.File = originalFile;
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(uploadImage).toHaveBeenCalledTimes(1);
@@ -785,65 +580,30 @@ describe("POST /api/projects", () => {
             new Error("Cloudinary delete failed"),
         );
 
-        class CleanupFailFile {
-            size: number;
-            type: string;
-            constructor(size: number, type: string) {
-                this.size = size;
-                this.type = type;
-            }
-            async arrayBuffer(): Promise<ArrayBuffer> {
-                return new ArrayBuffer(0);
-            }
-        }
+        const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
+            type: "image/jpeg",
+        });
 
-        const jpegFile = new CleanupFailFile(1024, "image/jpeg");
+        const formDataCleanup = new FormData();
+        formDataCleanup.set("title", "Project With Cleanup Failure");
+        formDataCleanup.set("description", "DB create should fail and cleanup should fail");
+        formDataCleanup.set("category", "Residential");
+        formDataCleanup.set("featured", "true");
+        formDataCleanup.append("image", jpegFile);
 
-        const g = globalThis as unknown as GlobalWithFile;
-        const originalFile = g.File;
-        g.File = CleanupFailFile;
+        const reqCleanup = new Request("http://localhost/api/projects", {
+            method: "POST",
+            body: formDataCleanup,
+        });
 
-        const fakeFormData = {
-            get(key: string) {
-                switch (key) {
-                    case "title":
-                        return "Project With Cleanup Failure";
-                    case "description":
-                        return "Create and cleanup should both fail";
-                    case "category":
-                        return "Residential";
-                    case "featured":
-                        return "true";
-                    default:
-                        return null;
-                }
-            },
-            getAll(key: string) {
-                if (key === "image") return [jpegFile];
-                return [];
-            },
-        };
-
-        const req = {
-            headers: {
-                get: (name: string) =>
-                    name.toLowerCase() === "content-type"
-                        ? "multipart/form-data; boundary=----test"
-                        : null,
-            },
-            formData: async () => fakeFormData,
-        } as unknown as Request;
-
-        const res = await POST(req);
-
-        g.File = originalFile;
+        const resCleanup = await POST(reqCleanup);
 
         expect(requireAdmin).toHaveBeenCalled();
         expect(uploadImage).toHaveBeenCalledTimes(1);
         expect(prisma.project.create).toHaveBeenCalledTimes(1);
+        expect(resCleanup.status).toBe(500);
+        const bodyCleanup = await resCleanup.json();
+        expect(bodyCleanup).toEqual({ error: "Failed to create project" });
         expect(deleteImage).toHaveBeenCalledWith(uploaded.publicId);
-        expect(res.status).toBe(500);
-        const body = await res.json();
-        expect(body).toEqual({ error: "Failed to create project" });
     });
 });

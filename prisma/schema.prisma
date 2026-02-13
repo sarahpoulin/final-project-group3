@@ -64,16 +64,17 @@ model VerificationToken {
 
 // Photos table
 model Project {
-  id            String        @id @default(cuid())
-  title         String
-  description   String?       @db.Text
-  imageUrl      String?       // First image URL for listing/cards (derived from images[0])
-  imagePublicId String?       // First image Cloudinary ID
-  category      String?
-  featured      Boolean       @default(false)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  images        ProjectImage[]
+  id               String        @id @default(cuid())
+  title            String
+  description      String?       @db.Text
+  imageUrl         String?       // First image URL for listing/cards (derived from images[0])
+  imagePublicId    String?       // First image Cloudinary ID
+  cloudinaryFolder String?       // Cloudinary folder path for this project's images (e.g. projects/20260213-143045)
+  category         String?
+  featured         Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  images           ProjectImage[]
 }
 
 model ProjectImage {

@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyAdmin } from "@/lib/auth-guards";
-import { deleteImage, uploadImage } from "@/lib/cloudinary";
+import {
+  DEFAULT_PROJECTS_FOLDER,
+  deleteFolder,
+  deleteImage,
+  uploadImage,
+} from "@/lib/cloudinary";
 
 export const runtime = "nodejs";
 
@@ -14,6 +19,22 @@ const ALLOWED_IMAGE_TYPES = new Set([
 ]);
 
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
+/** Derive folder from project createdAt for legacy projects without cloudinaryFolder. */
+function folderForProject(project: {
+  cloudinaryFolder: string | null;
+  createdAt: Date;
+}): string {
+  if (project.cloudinaryFolder) return project.cloudinaryFolder;
+  const d = new Date(project.createdAt);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${DEFAULT_PROJECTS_FOLDER}/${y}${m}${day}-${h}${min}${s}`;
+}
 
 type RouteParams = {
   params: Promise<{ id: string }>;
@@ -84,6 +105,10 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     const featured = formData.get("featured");
     const imageEntries = formData.getAll("image");
     const removeImage = formData.get("removeImage");
+    const keepPublicIdsRaw = formData.getAll("keepPublicIds");
+    const keepPublicIds = new Set(
+      keepPublicIdsRaw.filter((x): x is string => typeof x === "string"),
+    );
     const thumbnailIndexRaw = formData.get("thumbnailIndex");
 
     if (!title || typeof title !== "string") {
@@ -100,12 +125,17 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       );
     }
 
-    const imageFiles = imageEntries.filter(
-      (entry): entry is File => entry instanceof File && entry.size > 0,
-    );
-
-    const imageUrl: string | null = existing.imageUrl;
-    const imagePublicId: string | null = existing.imagePublicId;
+    const imageFiles = imageEntries.filter((entry): entry is File => {
+      if (!entry || typeof entry !== "object") return false;
+      if (entry instanceof File) return entry.size > 0;
+      const fileLike = entry as { size?: number; type?: string; arrayBuffer?: () => unknown };
+      return (
+        typeof fileLike.size === "number" &&
+        fileLike.size > 0 &&
+        typeof fileLike.type === "string" &&
+        typeof fileLike.arrayBuffer === "function"
+      );
+    });
 
     if (removeImage === "true") {
       // Remove all images, then optionally add new ones - must have new images
@@ -130,6 +160,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
       await prisma.projectImage.deleteMany({ where: { projectId: id } });
 
       if (imageFiles.length > 0) {
+        const folder = folderForProject(existing);
         const uploadedImages: { secureUrl: string; publicId: string }[] = [];
         for (const image of imageFiles) {
           if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
@@ -148,7 +179,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             );
           }
           const buffer = Buffer.from(await image.arrayBuffer());
-          const uploaded = await uploadImage(buffer);
+          const uploaded = await uploadImage(buffer, { folder });
           newUploadedPublicIds.push(uploaded.publicId);
           uploadedImages.push({ secureUrl: uploaded.secureUrl, publicId: uploaded.publicId });
         }
@@ -171,6 +202,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
                 : existing.featured,
             imageUrl: first.secureUrl,
             imagePublicId: first.publicId,
+            cloudinaryFolder: existing.cloudinaryFolder ?? folder,
             images: {
               create: uploadedImages.map((img, index) => ({
                 imageUrl: img.secureUrl,
@@ -202,31 +234,66 @@ export async function PATCH(req: Request, { params }: RouteParams) {
           },
         });
       }
-    } else if (imageFiles.length > 0) {
-      // Append new images to existing
-      const uploadedImages: { secureUrl: string; publicId: string }[] = [];
-      for (const image of imageFiles) {
-        if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
-          return NextResponse.json(
-            {
-              error:
-                "Invalid image type. Allowed: image/jpeg, image/jpg, image/png, image/webp, image/gif",
-            },
-            { status: 400 },
-          );
-        }
-        if (image.size > MAX_IMAGE_SIZE_BYTES) {
-          return NextResponse.json(
-            { error: "Image file is too large (max 10MB)" },
-            { status: 400 },
-          );
-        }
-        const buffer = Buffer.from(await image.arrayBuffer());
-        const uploaded = await uploadImage(buffer);
-        newUploadedPublicIds.push(uploaded.publicId);
-        uploadedImages.push({ secureUrl: uploaded.secureUrl, publicId: uploaded.publicId });
+    } else if (keepPublicIds.size < existing.images.length || imageFiles.length > 0) {
+      // Remove some existing images and/or add new ones
+      const toDelete = existing.images.filter((i) => !keepPublicIds.has(i.imagePublicId));
+      const kept = existing.images
+        .filter((i) => keepPublicIds.has(i.imagePublicId))
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+      if (kept.length === 0 && imageFiles.length === 0) {
+        return NextResponse.json(
+          { error: "At least one image is required" },
+          { status: 400 },
+        );
       }
-      const nextOrder = existing.images.length;
+      for (const img of toDelete) {
+        try {
+          await deleteImage(img.imagePublicId);
+        } catch {
+          return NextResponse.json(
+            { error: "Failed to delete project image" },
+            { status: 500 },
+          );
+        }
+      }
+      await prisma.projectImage.deleteMany({
+        where: {
+          projectId: id,
+          imagePublicId: { in: toDelete.map((i) => i.imagePublicId) },
+        },
+      });
+
+      const uploadedImages: { secureUrl: string; publicId: string }[] = [];
+      if (imageFiles.length > 0) {
+        const folder = folderForProject(existing);
+        for (const image of imageFiles) {
+          if (!ALLOWED_IMAGE_TYPES.has(image.type)) {
+            return NextResponse.json(
+              {
+                error:
+                  "Invalid image type. Allowed: image/jpeg, image/jpg, image/png, image/webp, image/gif",
+              },
+              { status: 400 },
+            );
+          }
+          if (image.size > MAX_IMAGE_SIZE_BYTES) {
+            return NextResponse.json(
+              { error: "Image file is too large (max 10MB)" },
+              { status: 400 },
+            );
+          }
+          const buffer = Buffer.from(await image.arrayBuffer());
+          const uploaded = await uploadImage(buffer, { folder });
+          newUploadedPublicIds.push(uploaded.publicId);
+          uploadedImages.push({ secureUrl: uploaded.secureUrl, publicId: uploaded.publicId });
+        }
+      }
+
+      const firstKept = kept[0];
+      const firstNew = uploadedImages[0];
+      const newImageUrl = firstKept?.imageUrl ?? firstNew?.secureUrl ?? null;
+      const newImagePublicId = firstKept?.imagePublicId ?? firstNew?.publicId ?? null;
+
       await prisma.project.update({
         where: { id },
         data: {
@@ -243,15 +310,17 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             typeof featured === "string"
               ? featured === "true"
               : existing.featured,
-          imageUrl: imageUrl ?? uploadedImages[0]?.secureUrl ?? null,
-          imagePublicId: imagePublicId ?? uploadedImages[0]?.publicId ?? null,
-          images: {
-            create: uploadedImages.map((img, index) => ({
-              imageUrl: img.secureUrl,
-              imagePublicId: img.publicId,
-              sortOrder: nextOrder + index,
-            })),
-          },
+          imageUrl: newImageUrl,
+          imagePublicId: newImagePublicId,
+          ...(uploadedImages.length > 0 && {
+            images: {
+              create: uploadedImages.map((img, index) => ({
+                imageUrl: img.secureUrl,
+                imagePublicId: img.publicId,
+                sortOrder: kept.length + index,
+              })),
+            },
+          }),
         },
       });
     } else {
@@ -355,6 +424,18 @@ export async function DELETE(req: Request, { params }: RouteParams) {
         return NextResponse.json(
           { error: "Failed to delete project image" },
           { status: 500 },
+        );
+      }
+    }
+
+    if (existing.cloudinaryFolder) {
+      try {
+        await deleteFolder(existing.cloudinaryFolder);
+      } catch (error) {
+        console.error(
+          "Failed to delete Cloudinary folder",
+          existing.cloudinaryFolder,
+          error,
         );
       }
     }

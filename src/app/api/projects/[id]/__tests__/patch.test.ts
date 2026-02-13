@@ -1,4 +1,5 @@
 /**
+ * @vitest-environment node
  * Tests for the `PATCH /api/projects/[id]` route handler.
  *
  * These tests verify admin-only update: auth via verifyAdmin, update via Prisma,
@@ -44,6 +45,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/cloudinary", () => ({
     uploadImage: vi.fn(),
     deleteImage: vi.fn(),
+    DEFAULT_PROJECTS_FOLDER: "projects",
 }));
 
 describe("PATCH /api/projects/[id]", () => {
@@ -195,26 +197,20 @@ describe("PATCH /api/projects/[id]", () => {
         (prisma.project.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(existing);
 
         const largeFile = new File(
-            [new ArrayBuffer(10 * 1024 * 1024 + 1)],
+            [new Uint8Array(10 * 1024 * 1024 + 1)],
             "large.jpg",
             { type: "image/jpeg" },
         );
 
-        const fakeFormData = {
-            get(key: string): string | File | null {
-                if (key === "title") return "Valid Title";
-                return null;
-            },
-            getAll(key: string): File[] {
-                if (key === "image") return [largeFile];
-                return [];
-            },
-        };
+        const formData = new FormData();
+        formData.set("title", "Valid Title");
+        formData.append("image", largeFile);
 
         const params = Promise.resolve({ id: existing.id });
-        const req = {
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request(`http://localhost/api/projects/${existing.id}`, {
+            method: "PATCH",
+            body: formData,
+        });
         const res = await PATCH(req, { params });
 
         expect(verifyAdmin).toHaveBeenCalledWith();
@@ -245,27 +241,19 @@ describe("PATCH /api/projects/[id]", () => {
         const existing = { ...mockProjects[0], images: [] };
         (prisma.project.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(existing);
 
-        const svgFile = new File(
-            [new ArrayBuffer(1)],
-            "image.svg",
-            { type: "image/svg+xml" },
-        );
+        const svgFile = new File([new Uint8Array(1)], "image.svg", {
+            type: "image/svg+xml",
+        });
 
-        const fakeFormData = {
-            get(key: string): string | File | null {
-                if (key === "title") return "Valid Title";
-                return null;
-            },
-            getAll(key: string): File[] {
-                if (key === "image") return [svgFile];
-                return [];
-            },
-        };
+        const formData = new FormData();
+        formData.set("title", "Valid Title");
+        formData.append("image", svgFile);
 
         const params = Promise.resolve({ id: existing.id });
-        const req = {
-            formData: async () => fakeFormData,
-        } as unknown as Request;
+        const req = new Request(`http://localhost/api/projects/${existing.id}`, {
+            method: "PATCH",
+            body: formData,
+        });
         const res = await PATCH(req, { params });
 
         expect(verifyAdmin).toHaveBeenCalledWith();

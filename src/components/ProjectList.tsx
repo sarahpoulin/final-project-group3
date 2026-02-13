@@ -113,7 +113,7 @@ export default function ProjectList({ onEdit }: ProjectListProps) {
   // Projects grid
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {projects.map((project) => (
+      {projects.map((project, projectIndex) => (
         <div
           key={project.id}
           className="bg-card border border-border rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow"
@@ -127,6 +127,7 @@ export default function ProjectList({ onEdit }: ProjectListProps) {
                 fill
                 sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 33vw"
                 className="object-cover"
+                priority={projectIndex < 3}
               />
               
               {/* Featured Badge */}

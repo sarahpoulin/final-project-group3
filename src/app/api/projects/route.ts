@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
-import { uploadImage, deleteImage } from "@/lib/cloudinary";
+import { uploadImage, deleteImage, generateProjectFolder } from "@/lib/cloudinary";
 
 export const runtime = "nodejs";
 
@@ -85,6 +85,7 @@ async function handlePostJson(req: Request) {
     const featured = body?.featured;
     const thumbnailIndexRaw = body?.thumbnailIndex;
     const uploadedImagesRaw = body?.uploadedImages;
+    const cloudinaryFolderRaw = body?.cloudinaryFolder;
 
     if (!title || typeof title !== "string") {
       return NextResponse.json(
@@ -139,6 +140,11 @@ async function handlePostJson(req: Request) {
     const imageUrl = chosenImage?.secureUrl ?? null;
     const imagePublicId = chosenImage?.publicId ?? null;
 
+    const cloudinaryFolder =
+      typeof cloudinaryFolderRaw === "string" && cloudinaryFolderRaw.trim().length > 0
+        ? cloudinaryFolderRaw.trim()
+        : null;
+
     const project = await prisma.project.create({
       data: {
         title: titleTrimmed,
@@ -153,6 +159,7 @@ async function handlePostJson(req: Request) {
         featured: featured === true || featured === "true",
         imageUrl,
         imagePublicId,
+        cloudinaryFolder,
         images: {
           create: uploadedImages.map((img, index) => ({
             imageUrl: img.secureUrl,
@@ -199,9 +206,17 @@ async function handlePostFormData(req: Request) {
       );
     }
 
-    const imageFiles = imageEntries.filter(
-      (entry): entry is File => entry instanceof File && entry.size > 0,
-    );
+    const imageFiles = imageEntries.filter((entry): entry is File => {
+      if (!entry || typeof entry !== "object") return false;
+      if (entry instanceof File) return entry.size > 0;
+      const fileLike = entry as { size?: number; type?: string; arrayBuffer?: () => unknown };
+      return (
+        typeof fileLike.size === "number" &&
+        fileLike.size > 0 &&
+        typeof fileLike.type === "string" &&
+        typeof fileLike.arrayBuffer === "function"
+      );
+    });
 
     if (imageFiles.length === 0) {
       return NextResponse.json(
@@ -210,6 +225,7 @@ async function handlePostFormData(req: Request) {
       );
     }
 
+    const cloudinaryFolder = generateProjectFolder();
     const uploadedImages: { secureUrl: string; publicId: string }[] = [];
 
     for (const image of imageFiles) {
@@ -229,7 +245,7 @@ async function handlePostFormData(req: Request) {
         );
       }
       const buffer = Buffer.from(await image.arrayBuffer());
-      const uploaded = await uploadImage(buffer);
+      const uploaded = await uploadImage(buffer, { folder: cloudinaryFolder });
       uploadedPublicIds.push(uploaded.publicId);
       uploadedImages.push({ secureUrl: uploaded.secureUrl, publicId: uploaded.publicId });
     }
@@ -259,6 +275,7 @@ async function handlePostFormData(req: Request) {
         featured: typeof featured === "string" ? featured === "true" : false,
         imageUrl,
         imagePublicId,
+        cloudinaryFolder,
         images: {
           create: uploadedImages.map((img, index) => ({
             imageUrl: img.secureUrl,

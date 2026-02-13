@@ -29,6 +29,7 @@ interface ProjectUploadFormProps {
 }
 
 export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUploadFormProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
@@ -41,6 +42,13 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  // Expand when editing a project
+  useEffect(() => {
+    if (editProject) {
+      setIsExpanded(true);
+    }
+  }, [editProject]);
 
   // Pre-fill form when in edit mode; fetch full project to get all images
   useEffect(() => {
@@ -133,6 +141,16 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
     }
   };
 
+  const removeExistingImageAt = (index: number) => {
+    if (existingImages.length <= 1) return;
+    setExistingImages((prev) => prev.filter((_, i) => i !== index));
+    if (thumbnailIndex === index) {
+      setThumbnailIndex(0);
+    } else if (thumbnailIndex > index) {
+      setThumbnailIndex((prev) => prev - 1);
+    }
+  };
+
   const handleRemoveAllImages = () => {
     const confirmed = window.confirm(
       'Are you sure you want to remove all images? This cannot be undone until you save.',
@@ -178,7 +196,11 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
       formData.append('category', category);
       formData.append('featured', 'false');
       imageFiles.forEach((file) => formData.append('image', file));
-      if (removeImage) formData.append('removeImage', 'true');
+      if (removeImage) {
+        formData.append('removeImage', 'true');
+      } else {
+        existingImages.forEach((img) => formData.append('keepPublicIds', img.publicId));
+      }
       formData.append('thumbnailIndex', String(thumbIdx));
 
       const xhr = new XMLHttpRequest();
@@ -193,6 +215,17 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
           try {
             const project = JSON.parse(xhr.responseText);
             setSuccess(true);
+            setIsExpanded(false);
+            setTitle('');
+            setDescription('');
+            setCategory('');
+            setImageFiles([]);
+            setImagePreviews([]);
+            setExistingImages([]);
+            setThumbnailIndex(0);
+            setRemoveImage(false);
+            const fileInput = document.getElementById('image') as HTMLInputElement;
+            if (fileInput) fileInput.value = '';
             onSuccess?.(project);
           } catch {
             setError('Invalid response from server');
@@ -227,7 +260,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
           const data = await configRes.json().catch(() => ({}));
           throw new Error(data.error || 'Upload not configured');
         }
-        const { cloudName, apiKey, timestamp, signature, folder } = await configRes.json();
+        const { cloudName, apiKey, timestamp, signature, folder: cloudinaryFolder } = await configRes.json();
         const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
 
         const totalBytes = imageFiles.reduce((sum, f) => sum + f.size, 0);
@@ -245,7 +278,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             fd.append('api_key', apiKey);
             fd.append('timestamp', String(timestamp));
             fd.append('signature', signature);
-            fd.append('folder', folder);
+            fd.append('folder', cloudinaryFolder);
             const xhr = new XMLHttpRequest();
             xhr.upload.addEventListener('progress', (event) => {
               if (event.lengthComputable) {
@@ -295,6 +328,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             featured: false,
             thumbnailIndex: thumbIdx,
             uploadedImages,
+            cloudinaryFolder: typeof cloudinaryFolder === 'string' ? cloudinaryFolder : undefined,
           }),
         });
 
@@ -304,6 +338,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
         }
         const project = await projectRes.json();
         setSuccess(true);
+        setIsExpanded(false);
         onSuccess?.(project);
         setTitle('');
         setDescription('');
@@ -326,11 +361,35 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
 
   };
 
+  if (!isExpanded) {
+    return (
+      <div className="max-w-2xl mx-auto p-6 bg-card rounded-xl shadow-md border border-border">
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          className="w-full py-4 px-6 rounded-lg border-2 border-dashed border-border bg-muted/50 hover:bg-muted hover:border-primary transition-colors text-foreground font-medium"
+        >
+          + Upload New Project
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl mx-auto p-6 bg-card rounded-xl shadow-md border border-border">
-      <h2 className="text-2xl font-bold mb-6 text-foreground">
-        {editProject ? 'Edit Project' : 'Upload New Project'}
-      </h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold text-foreground">
+          {editProject ? 'Edit Project' : 'Upload New Project'}
+        </h2>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(false)}
+          className="text-sm text-muted-foreground hover:text-foreground"
+          aria-label="Collapse"
+        >
+          Collapse
+        </button>
+      </div>
 
       {/* Error Message */}
       {error && (
@@ -407,25 +466,39 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
               <div className="flex flex-wrap gap-3">
                 {!removeImage &&
                   existingImages.map((img, index) => (
-                    <button
-                      type="button"
-                      key={`existing-${index}`}
-                      onClick={() => setThumbnailIndex(index)}
-                      title={thumbnailIndex === index ? 'Thumbnail (click another to change)' : 'Set as thumbnail'}
-                      aria-label={thumbnailIndex === index ? 'Current thumbnail' : 'Set as thumbnail'}
-                      className={`relative w-32 h-32 rounded-lg overflow-hidden border-2 shrink-0 transition-colors ${
-                        thumbnailIndex === index
-                          ? 'border-primary ring-2 ring-primary'
-                          : 'border-border hover:border-primary/50'
-                      }`}
+                    <div
+                      key={`existing-${img.publicId}`}
+                      className="relative w-32 h-32 rounded-lg overflow-hidden border-2 shrink-0 group"
                     >
-                      <Image src={img.url} alt="" fill className="object-cover" sizes="128px" />
+                      <button
+                        type="button"
+                        onClick={() => setThumbnailIndex(index)}
+                        title={thumbnailIndex === index ? 'Thumbnail (click another to change)' : 'Set as thumbnail'}
+                        aria-label={thumbnailIndex === index ? 'Current thumbnail' : 'Set as thumbnail'}
+                        className={`absolute inset-0 w-full h-full border-2 transition-colors ${
+                          thumbnailIndex === index
+                            ? 'border-primary ring-2 ring-primary'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      />
+                      <Image src={img.url} alt="" fill className="object-cover pointer-events-none" sizes="128px" />
                       {thumbnailIndex === index && (
-                        <span className="absolute bottom-0 left-0 right-0 bg-primary/90 text-primary-foreground text-xs font-medium py-1 text-center">
+                        <span className="absolute bottom-0 left-0 right-0 bg-primary/90 text-primary-foreground text-xs font-medium py-1 text-center pointer-events-none">
                           Thumbnail
                         </span>
                       )}
-                    </button>
+                      {existingImages.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeExistingImageAt(index)}
+                          className="absolute top-1 right-1 bg-destructive text-destructive-foreground w-6 h-6 rounded text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                          title="Remove this image"
+                          aria-label="Remove this image"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   ))}
                 {imagePreviews.map((preview, index) => {
                   const idx = existingImages.length + index;
@@ -514,8 +587,8 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
               />
               <span className="relative z-10 font-medium text-foreground">
                 {uploadProgress > 0 && uploadProgress < 100
-                  ? `Uploading... ${uploadProgress}%`
-                  : 'Uploading...'}
+                  ? `${editProject ? 'Updating' : 'Uploading'}... ${uploadProgress}%`
+                  : editProject ? 'Updating...' : 'Uploading...'}
               </span>
             </div>
           ) : (

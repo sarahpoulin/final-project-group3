@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { DELETE } from "../route";
 import { prisma } from "@/lib/db";
 import { verifyAdmin } from "@/lib/auth-guards";
-import { deleteImage } from "@/lib/cloudinary";
+import { deleteFolder, deleteImage } from "@/lib/cloudinary";
 import { mockProjects } from "../../__tests__/fixtures";
 
 // Mock auth guard used by the DELETE handler so we can simulate admin vs
@@ -42,6 +42,7 @@ vi.mock("@/lib/db", () => ({
 // Mock Cloudinary so we avoid real deletions and only assert calls.
 vi.mock("@/lib/cloudinary", () => ({
     deleteImage: vi.fn(),
+    deleteFolder: vi.fn(),
 }));
 
 describe("DELETE /api/projects/[id]", () => {
@@ -84,6 +85,7 @@ describe("DELETE /api/projects/[id]", () => {
         expect(deleteImage).toHaveBeenCalledWith(project.imagePublicId);
         expect(prisma.project.delete).toHaveBeenCalledWith({ where: { id: projectId } });
         expect(res1.status).toBe(200);
+        expect(deleteFolder).not.toHaveBeenCalled();
         const body1 = await res1.json();
         expect(body1).toEqual({ success: true });
 
@@ -100,6 +102,38 @@ describe("DELETE /api/projects/[id]", () => {
         // delete and deleteImage must not be called again when project is not found
         expect(prisma.project.delete).toHaveBeenCalledTimes(1);
         expect(deleteImage).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * When the project has cloudinaryFolder set, the handler must delete the
+     * Cloudinary folder after deleting all images.
+     */
+    it("should delete the Cloudinary folder when project has cloudinaryFolder", async () => {
+        (verifyAdmin as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+            ok: true,
+            user: { isAdmin: true },
+        });
+
+        const project = {
+            ...mockProjects[0],
+            cloudinaryFolder: "projects/20260213-120000",
+            images: [] as { imagePublicId: string }[],
+        };
+        (prisma.project.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(project);
+        (prisma.project.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+        (deleteImage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+        (deleteFolder as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+        const params = Promise.resolve({ id: project.id });
+        const req = new Request(`http://localhost/api/projects/${project.id}`, {
+            method: "DELETE",
+        });
+        const res = await DELETE(req, { params });
+
+        expect(deleteImage).toHaveBeenCalledWith(project.imagePublicId);
+        expect(deleteFolder).toHaveBeenCalledWith("projects/20260213-120000");
+        expect(prisma.project.delete).toHaveBeenCalledWith({ where: { id: project.id } });
+        expect(res.status).toBe(200);
     });
 
     /**
