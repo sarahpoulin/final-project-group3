@@ -11,7 +11,9 @@ import {
   TouchSensor,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -24,6 +26,17 @@ import type { ProjectApiResponse } from '@/types/project';
 
 const PAGE_SIZE = 6;
 const TAG_NONE = '__none__';
+
+function formatProjectDate(createdAt: string, dateIsMonthOnly?: boolean | null): string {
+  const d = new Date(createdAt);
+  const month = d.toLocaleString('default', { month: 'long' });
+  const year = d.getFullYear();
+  if (dateIsMonthOnly) {
+    return `${month} ${year}`;
+  }
+  const day = d.getDate();
+  return `${month} ${day}, ${year}`;
+}
 
 function ProjectCard({
   project,
@@ -68,12 +81,24 @@ function ProjectCard({
         {project.description && (
           <p className="text-sm text-foreground/80 line-clamp-3">{project.description}</p>
         )}
+        <p className="text-xs text-muted-foreground mt-2">
+          {formatProjectDate(project.createdAt, project.dateIsMonthOnly)}
+        </p>
       </div>
     </div>
   );
 }
 
-function SortableProjectCard({ project }: { project: ProjectApiResponse }) {
+function SortableProjectCard({
+  project,
+  dateKeyOfDragged,
+}: {
+  project: ProjectApiResponse;
+  dateKeyOfDragged: string | null;
+}) {
+  const dateKey = project.createdAt?.slice(0, 10) ?? '';
+  const isSameDateGroup = dateKeyOfDragged == null || dateKey === dateKeyOfDragged;
+
   const {
     attributes,
     listeners,
@@ -81,7 +106,10 @@ function SortableProjectCard({ project }: { project: ProjectApiResponse }) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: project.id });
+  } = useSortable({
+    id: project.id,
+    data: { dateKey },
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -92,14 +120,15 @@ function SortableProjectCard({ project }: { project: ProjectApiResponse }) {
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
-      className={`bg-card border border-border rounded-xl overflow-hidden flex flex-col h-full cursor-grab active:cursor-grabbing touch-manipulation select-none ${
-        isDragging
-          ? 'opacity-90 z-10 ring-2 ring-primary ring-offset-2 ring-offset-background shadow-[0_0_0_2px_var(--primary),0_0_24px_color-mix(in_srgb,var(--primary)_50%,transparent)]'
-          : 'ring-2 ring-primary/50 ring-offset-2 ring-offset-background shadow-[0_0_0_1px_color-mix(in_srgb,var(--primary)_30%,transparent),0_0_16px_color-mix(in_srgb,var(--primary)_20%,transparent)] hover:ring-primary/70 hover:shadow-[0_0_0_1px_color-mix(in_srgb,var(--primary)_40%,transparent),0_0_20px_color-mix(in_srgb,var(--primary)_30%,transparent)] transition-all'
+      {...(isSameDateGroup ? { ...attributes, ...listeners } : {})}
+      className={`bg-card border border-border rounded-xl overflow-hidden flex flex-col h-full touch-manipulation select-none ${
+        !isSameDateGroup
+          ? 'opacity-70 pointer-events-none cursor-default ring-0 shadow-none'
+          : isDragging
+            ? 'opacity-90 z-10 cursor-grabbing ring-2 ring-primary ring-offset-2 ring-offset-background shadow-[0_0_0_2px_var(--primary),0_0_24px_color-mix(in_srgb,var(--primary)_50%,transparent)]'
+            : 'cursor-grab active:cursor-grabbing ring-2 ring-primary/50 ring-offset-2 ring-offset-background shadow-[0_0_0_1px_color-mix(in_srgb,var(--primary)_30%,transparent),0_0_16px_color-mix(in_srgb,var(--primary)_20%,transparent)] hover:ring-primary/70 hover:shadow-[0_0_0_1px_color-mix(in_srgb,var(--primary)_40%,transparent),0_0_20px_color-mix(in_srgb,var(--primary)_30%,transparent)] transition-all'
       }`}
-      aria-label={`Drag to reorder: ${project.title}`}
+      aria-label={isSameDateGroup ? `Drag to reorder: ${project.title}` : `${project.title} (different date)`}
     >
       {project.imageUrl && (
         <div className="relative h-48 bg-muted shrink-0">
@@ -134,6 +163,9 @@ function SortableProjectCard({ project }: { project: ProjectApiResponse }) {
         {project.description && (
           <p className="text-sm text-foreground/80 line-clamp-3">{project.description}</p>
         )}
+        <p className="text-xs text-muted-foreground mt-2">
+          {formatProjectDate(project.createdAt, project.dateIsMonthOnly)}
+        </p>
       </div>
     </div>
   );
@@ -154,6 +186,7 @@ export default function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const [dateKeyOfDragged, setDateKeyOfDragged] = useState<string | null>(null);
 
   const maxDisplayCountRef = useRef(PAGE_SIZE);
   maxDisplayCountRef.current = Math.max(maxDisplayCountRef.current, projects.length);
@@ -245,15 +278,39 @@ export default function ProjectsPage() {
     useSensor(KeyboardSensor),
   );
 
+  const handleDragStart = (event: DragStartEvent) => {
+    const project = projects.find((p) => p.id === event.active.id);
+    setDateKeyOfDragged(project?.createdAt?.slice(0, 10) ?? null);
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
+    setDateKeyOfDragged(null);
     if (!over || active.id === over.id) return;
     setProjects((prev) => {
       const ids = prev.map((p) => p.id);
       const oldIndex = ids.indexOf(active.id as string);
       const newIndex = ids.indexOf(over.id as string);
       if (oldIndex === -1 || newIndex === -1) return prev;
+      const dragged = prev[oldIndex];
+      if (!dragged?.createdAt) return prev;
+      const dateKey = dragged.createdAt.slice(0, 10);
+      const sameDateIndices = prev
+        .map((p, i) => (p.createdAt?.slice(0, 10) === dateKey ? i : -1))
+        .filter((i) => i >= 0);
+      if (!sameDateIndices.includes(newIndex)) return prev;
       return arrayMove(prev, oldIndex, newIndex);
+    });
+  };
+
+  const sameDateCollisionDetection: CollisionDetection = (args) => {
+    const base = closestCenter(args);
+    const activeKey = (args.active.data.current as { dateKey?: string } | undefined)?.dateKey;
+    if (activeKey == null) return base;
+    return base.filter((c) => {
+      const overProject = projects.find((p) => p.id === c.id);
+      const overKey = overProject?.createdAt?.slice(0, 10);
+      return overKey === activeKey;
     });
   };
 
@@ -380,27 +437,7 @@ export default function ProjectsPage() {
               </>
             ) : (
               <button
-                onClick={async () => {
-                  setSelectedTag(null);
-                  setLoading(true);
-                  setError(null);
-                  try {
-                    const params = new URLSearchParams();
-                    if (selectedYear !== null) params.set('year', String(selectedYear));
-                    const url = params.toString()
-                      ? `/api/projects?${params.toString()}`
-                      : '/api/projects';
-                    const res = await fetch(url, { credentials: 'include' });
-                    if (!res.ok) throw new Error('Failed to fetch');
-                    const data = await res.json();
-                    setProjects(Array.isArray(data) ? data : data.projects ?? []);
-                    setIsReorderMode(true);
-                  } catch {
-                    setError('Failed to load projects for reordering');
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
+                onClick={() => setIsReorderMode(true)}
                 className="px-4 py-2 rounded-lg border border-border bg-card text-foreground font-medium hover:bg-muted transition-colors"
               >
                 Edit order
@@ -463,19 +500,37 @@ export default function ProjectsPage() {
         )}
 
         {!loading && !error && projects.length > 0 && isReorderMode && (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext items={projects.map((p) => p.id)} strategy={rectSortingStrategy}>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map((project) => (
-                  <SortableProjectCard key={project.id} project={project} />
-                ))}
+          <>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={sameDateCollisionDetection}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={projects.map((p) => p.id)} strategy={rectSortingStrategy}>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {projects.map((project) => (
+                    <SortableProjectCard
+                      key={project.id}
+                      project={project}
+                      dateKeyOfDragged={dateKeyOfDragged}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+            {hasMore && (
+              <div className="mt-8 flex justify-center">
+                <button
+                  onClick={() => fetchProjects({ append: true, offset: projects.length })}
+                  disabled={loadingMore}
+                  className="px-6 py-3 rounded-lg border border-border bg-card text-foreground font-medium hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
               </div>
-            </SortableContext>
-          </DndContext>
+            )}
+          </>
         )}
       </div>
     </div>

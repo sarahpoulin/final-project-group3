@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
-import { uploadImage, deleteImage, generateProjectFolder } from "@/lib/cloudinary";
+import {
+  uploadImage,
+  deleteImage,
+  generateProjectFolder,
+  parseFolderToCreatedAt,
+} from "@/lib/cloudinary";
 import { resolveTagNamesToIds } from "@/lib/tags";
 
 export const runtime = "nodejs";
@@ -15,6 +20,27 @@ const ALLOWED_IMAGE_TYPES = new Set([
 ]);
 
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+
+/**
+ * For CREATE: assign displayOrder so the new project sits with others on the same date.
+ * Projects are listed by date (newest first), then by displayOrder within the same day.
+ * Returns max(displayOrder) among projects with the same calendar day as createdAt, +1.
+ */
+async function getDisplayOrderForNewProject(createdAt: Date): Promise<number> {
+  const startOfDay = new Date(createdAt);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(startOfDay);
+  endOfDay.setDate(endOfDay.getDate() + 1);
+
+  const result = await prisma.project.aggregate({
+    _max: { displayOrder: true },
+    where: {
+      createdAt: { gte: startOfDay, lt: endOfDay },
+    },
+  });
+  const maxOrder = result._max.displayOrder;
+  return maxOrder == null ? 0 : maxOrder + 1;
+}
 
 /**
  * GET /api/projects
@@ -71,7 +97,7 @@ export async function GET(req: Request) {
 
     const projects = await prisma.project.findMany({
       where,
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }],
+      orderBy: [{ createdAt: "desc" }, { displayOrder: "asc" }],
       include: { projectTags: { include: { tag: { select: { name: true } } } } },
       ...(limit != null && {
         take: limit + 1,
@@ -192,13 +218,30 @@ async function handlePostJson(req: Request) {
         ? cloudinaryFolderRaw.trim()
         : null;
 
+    const dateIsMonthOnly =
+      cloudinaryFolder != null && body?.dateIsMonthOnly === true ? true : undefined;
+
+    const createdAt =
+      cloudinaryFolder != null ? parseFolderToCreatedAt(cloudinaryFolder) : undefined;
+    if (createdAt) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const chosenStart = new Date(createdAt);
+      chosenStart.setHours(0, 0, 0, 0);
+      if (chosenStart > todayStart) {
+        return NextResponse.json(
+          { error: "Project date cannot be in the future" },
+          { status: 400 },
+        );
+      }
+    }
     const tagNames = Array.isArray(tagsRaw)
       ? tagsRaw.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
       : [];
     const tagIds = await resolveTagNamesToIds(tagNames);
 
-    // New projects appear first on /projects: set displayOrder 0 and shift others down
-    await prisma.project.updateMany({ data: { displayOrder: { increment: 1 } } });
+    const createdAtForOrder = createdAt ?? new Date();
+    const insertIndex = await getDisplayOrderForNewProject(createdAtForOrder);
 
     const project = await prisma.project.create({
       data: {
@@ -208,10 +251,12 @@ async function handlePostJson(req: Request) {
             ? description.trim() || null
             : null,
         featured: featured === true || featured === "true",
-        displayOrder: 0,
+        displayOrder: insertIndex,
         imageUrl,
         imagePublicId,
         cloudinaryFolder,
+        ...(createdAt && { createdAt }),
+        ...(dateIsMonthOnly !== undefined && { dateIsMonthOnly }),
         images: {
           create: uploadedImages.map((img, index) => ({
             imageUrl: img.secureUrl,
@@ -336,8 +381,8 @@ async function handlePostFormData(req: Request) {
     }
     const tagIds = await resolveTagNamesToIds(tagNames);
 
-    // New projects appear first on /projects: set displayOrder 0 and shift others down
-    await prisma.project.updateMany({ data: { displayOrder: { increment: 1 } } });
+    const createdAtForOrder = new Date();
+    const insertIndex = await getDisplayOrderForNewProject(createdAtForOrder);
 
     const project = await prisma.project.create({
       data: {
@@ -347,7 +392,7 @@ async function handlePostFormData(req: Request) {
             ? description.trim() || null
             : null,
         featured: typeof featured === "string" ? featured === "true" : false,
-        displayOrder: 0,
+        displayOrder: insertIndex,
         imageUrl,
         imagePublicId,
         cloudinaryFolder,

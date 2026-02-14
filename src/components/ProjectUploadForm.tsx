@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import TagInput from './TagInput';
 
@@ -43,6 +43,18 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [projectDateYear, setProjectDateYear] = useState<string>('');
+  const [projectDateMonth, setProjectDateMonth] = useState<string>('');
+  const [projectDateDay, setProjectDateDay] = useState<string>('');
+  const [dateError, setDateError] = useState<string | null>(null);
+  const dateErrorRef = useRef<HTMLDivElement>(null);
+
+  // When date error appears, scroll it into view
+  useEffect(() => {
+    if (dateError && dateErrorRef.current) {
+      dateErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [dateError]);
 
   // Expand when editing a project
   useEffect(() => {
@@ -57,6 +69,16 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
     setTitle(editProject.title);
     setDescription(editProject.description || '');
     setTags(editProject.tags ?? []);
+    if (editProject.createdAt) {
+      const d = new Date(editProject.createdAt);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const choice = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+      const use = choice > today ? today : d;
+      setProjectDateYear(String(use.getFullYear()));
+      setProjectDateMonth(String(use.getMonth() + 1));
+      setProjectDateDay(String(use.getDate()));
+    }
     const initialImages =
       editProject.images?.length
         ? editProject.images.map((i) => ({ url: i.imageUrl, publicId: i.imagePublicId }))
@@ -94,6 +116,40 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
 
   const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
   const maxSize = 10 * 1024 * 1024; // 10MB
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const currentDay = now.getDate();
+  const MIN_YEAR = 1970;
+
+  const getDaysInMonth = (month: number, year: number) => {
+    if (month < 1 || month > 12) return 31;
+    return new Date(year, month, 0).getDate();
+  };
+
+  const getMaxMonth = (year: number) => {
+    if (year !== currentYear) return 12;
+    return currentMonth;
+  };
+
+  const getMaxDay = (year: number, month: number) => {
+    const daysInMonth = getDaysInMonth(month, year);
+    if (year !== currentYear || month !== currentMonth) return daysInMonth;
+    return Math.min(currentDay, daysInMonth);
+  };
+
+  const yearNum = projectDateYear ? parseInt(projectDateYear, 10) : 0;
+  const monthNum = projectDateMonth ? parseInt(projectDateMonth, 10) : 0;
+  const maxMonth = yearNum ? getMaxMonth(yearNum) : 12;
+  const maxDay = yearNum && monthNum ? getMaxDay(yearNum, monthNum) : 31;
+
+  const clampDayIfNeeded = (y: number, m: number, currentDayVal: string) => {
+    const mx = getMaxDay(y, m);
+    const d = currentDayVal ? parseInt(currentDayVal, 10) : 0;
+    if (d > mx) return String(mx);
+    return currentDayVal;
+  };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -171,6 +227,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
 
     setError(null);
     setSuccess(false);
+    setDateError(null);
 
     const totalImages = existingImages.length + imagePreviews.length;
 
@@ -185,6 +242,14 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
       return;
     }
 
+    // If year is chosen, month is required; otherwise clear date or choose both
+    const yearSet = projectDateYear.trim() !== '';
+    const monthSet = projectDateMonth.trim() !== '';
+    if (yearSet && !monthSet) {
+      setDateError('Choose a month or clear the year to leave the date unset.');
+      return;
+    }
+
     setLoading(true);
     setUploadProgress(0);
     const thumbIdx = totalImages > 0 ? Math.min(thumbnailIndex, totalImages - 1) : 0;
@@ -196,6 +261,11 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
       formData.append('description', description);
       formData.append('tags', JSON.stringify(tags));
       formData.append('featured', 'false');
+      if (projectDateYear.trim() !== '' && projectDateMonth.trim() !== '') {
+        formData.append('projectDateYear', projectDateYear.trim());
+        formData.append('projectDateMonth', projectDateMonth.trim());
+        if (projectDateDay.trim() !== '') formData.append('projectDateDay', projectDateDay.trim());
+      }
       imageFiles.forEach((file) => formData.append('image', file));
       if (removeImage) {
         formData.append('removeImage', 'true');
@@ -225,6 +295,9 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             setExistingImages([]);
             setThumbnailIndex(0);
             setRemoveImage(false);
+            setProjectDateYear('');
+            setProjectDateMonth('');
+            setProjectDateDay('');
             const fileInput = document.getElementById('image') as HTMLInputElement;
             if (fileInput) fileInput.value = '';
             onSuccess?.(project);
@@ -256,7 +329,22 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
     // Create project: upload images to Cloudinary from client (real progress), then POST JSON
     if (imageFiles.length > 0) {
       try {
-        const configRes = await fetch('/api/cloudinary-config', { credentials: 'include' });
+        const configUrl = new URL('/api/cloudinary-config', window.location.origin);
+        const hasDate =
+          projectDateYear.trim() !== '' &&
+          projectDateMonth.trim() !== '' &&
+          parseInt(projectDateYear, 10) >= 1970 &&
+          parseInt(projectDateMonth, 10) >= 1 &&
+          parseInt(projectDateMonth, 10) <= 12;
+        if (hasDate) {
+          configUrl.searchParams.set('year', projectDateYear.trim());
+          configUrl.searchParams.set('month', projectDateMonth.trim());
+          if (projectDateDay.trim() !== '') {
+            const day = parseInt(projectDateDay.trim(), 10);
+            if (day >= 1 && day <= 31) configUrl.searchParams.set('day', projectDateDay.trim());
+          }
+        }
+        const configRes = await fetch(configUrl.toString(), { credentials: 'include' });
         if (!configRes.ok) {
           const data = await configRes.json().catch(() => ({}));
           throw new Error(data.error || 'Upload not configured');
@@ -330,6 +418,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             thumbnailIndex: thumbIdx,
             uploadedImages,
             cloudinaryFolder: typeof cloudinaryFolder === 'string' ? cloudinaryFolder : undefined,
+            dateIsMonthOnly: hasDate && projectDateDay.trim() === '',
           }),
         });
 
@@ -341,9 +430,12 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
         setSuccess(true);
         setIsExpanded(false);
         onSuccess?.(project);
-            setTitle('');
-            setDescription('');
-            setTags([]);
+        setTitle('');
+        setDescription('');
+        setTags([]);
+        setProjectDateYear('');
+        setProjectDateMonth('');
+        setProjectDateDay('');
         setImageFiles([]);
         setImagePreviews([]);
         setExistingImages([]);
@@ -454,6 +546,109 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
               return res.json();
             }}
           />
+        </div>
+
+        {/* Project date (optional): dropdowns only allow past/today; used as Cloudinary folder name */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-foreground">
+            Project date (optional)
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Year and month at minimum. Used as the Cloudinary folder name; time defaults to midnight. Future dates are not allowed. If only year and month are set, the first of the month is used (same month without day adds +1 second for uniqueness).
+          </p>
+          {dateError && (
+            <div
+              id="project-date-error"
+              ref={dateErrorRef}
+              role="alert"
+              className="p-4 rounded-lg border-2 border-red-600 bg-red-50 text-red-800 font-medium text-sm dark:border-red-500 dark:bg-red-950/50 dark:text-red-200"
+            >
+              {dateError}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label htmlFor="projectDateYear" className="text-sm text-muted-foreground whitespace-nowrap">
+                Year
+              </label>
+              <select
+                id="projectDateYear"
+                value={projectDateYear}
+                onChange={(e) => {
+                  setDateError(null);
+                  const val = e.target.value;
+                  setProjectDateYear(val);
+                  const y = val ? parseInt(val, 10) : 0;
+                  const m = monthNum || 1;
+                  if (y && projectDateDay) setProjectDateDay(clampDayIfNeeded(y, m, projectDateDay));
+                }}
+                aria-invalid={Boolean(dateError && projectDateYear.trim() !== '' && projectDateMonth.trim() === '')}
+                aria-describedby={dateError ? 'project-date-error' : undefined}
+                className={`px-3 py-2 border-2 rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent bg-background text-foreground ${
+                  dateError && projectDateYear.trim() !== '' && projectDateMonth.trim() === ''
+                    ? 'border-red-600 ring-2 ring-red-500'
+                    : 'border-input'
+                }`}
+              >
+                <option value="">—</option>
+                {Array.from({ length: currentYear - MIN_YEAR + 1 }, (_, i) => currentYear - i).map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="projectDateMonth" className="text-sm text-muted-foreground whitespace-nowrap">
+                Month
+              </label>
+              <select
+                id="projectDateMonth"
+                value={projectDateMonth}
+                onChange={(e) => {
+                  setDateError(null);
+                  const val = e.target.value;
+                  setProjectDateMonth(val);
+                  const m = val ? parseInt(val, 10) : 0;
+                  const y = yearNum || currentYear;
+                  if (m && projectDateDay) setProjectDateDay(clampDayIfNeeded(y, m, projectDateDay));
+                }}
+                aria-invalid={Boolean(dateError && projectDateYear.trim() !== '' && projectDateMonth.trim() === '')}
+                aria-describedby={dateError ? 'project-date-error' : undefined}
+                className={`px-3 py-2 border-2 rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent bg-background text-foreground ${
+                  dateError && projectDateYear.trim() !== '' && projectDateMonth.trim() === ''
+                    ? 'border-red-600 ring-2 ring-red-500'
+                    : 'border-input'
+                }`}
+              >
+                <option value="">—</option>
+                {Array.from({ length: maxMonth }, (_, i) => i + 1).map((m) => (
+                  <option key={m} value={m}>
+                    {new Date(2000, m - 1, 1).toLocaleString('default', { month: 'long' })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="projectDateDay" className="text-sm text-muted-foreground whitespace-nowrap">
+                Day (optional)
+              </label>
+              <select
+                id="projectDateDay"
+                value={projectDateDay}
+                onChange={(e) => setProjectDateDay(e.target.value)}
+                className="px-3 py-2 border border-input bg-background text-foreground rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent"
+              >
+                <option value="">—</option>
+                {yearNum && monthNum &&
+                  Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Image Upload Section - multiple images */}

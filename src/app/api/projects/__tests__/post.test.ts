@@ -32,6 +32,7 @@ vi.mock("@/lib/auth-guards", () => ({
 vi.mock("@/lib/db", () => ({
     prisma: {
         project: {
+            aggregate: vi.fn().mockResolvedValue({ _max: { displayOrder: null } }),
             updateMany: vi.fn().mockResolvedValue(undefined),
             create: vi.fn(),
         },
