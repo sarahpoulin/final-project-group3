@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyAdmin } from "@/lib/auth-guards";
+import { resolveTagNamesToIds } from "@/lib/tags";
 import {
   DEFAULT_PROJECTS_FOLDER,
   deleteFolder,
@@ -50,7 +51,10 @@ export async function GET(_req: Request, { params }: RouteParams) {
     const { id } = await params;
     const project = await prisma.project.findUnique({
       where: { id },
-      include: { images: { orderBy: { sortOrder: "asc" } } },
+      include: {
+        images: { orderBy: { sortOrder: "asc" } },
+        projectTags: { include: { tag: { select: { name: true } } } },
+      },
     });
 
     if (!project) {
@@ -60,7 +64,8 @@ export async function GET(_req: Request, { params }: RouteParams) {
       );
     }
 
-    return NextResponse.json(project);
+    const { projectTags, ...rest } = project;
+    return NextResponse.json({ ...rest, tags: projectTags.map((pt) => pt.tag.name) });
   } catch {
     return NextResponse.json(
       { error: "Failed to fetch project" },
@@ -73,7 +78,7 @@ export async function GET(_req: Request, { params }: RouteParams) {
  * PATCH /api/projects/[id]
  *
  * Admin-only endpoint that updates an existing project using multipart/form-data.
- * Supports optional `title`, `description`, `category`, `featured`, `image` (replace),
+ * Supports optional `title`, `description`, `tags`, `featured`, `image` (replace),
  * and `removeImage` (delete existing image without replacement), and returns the updated project.
  */
 export async function PATCH(req: Request, { params }: RouteParams) {
@@ -101,7 +106,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     const formData = await req.formData();
     const title = formData.get("title");
     const description = formData.get("description");
-    const category = formData.get("category");
+    const tagsRaw = formData.get("tags");
     const featured = formData.get("featured");
     const imageEntries = formData.getAll("image");
     const removeImage = formData.get("removeImage");
@@ -136,6 +141,25 @@ export async function PATCH(req: Request, { params }: RouteParams) {
         typeof fileLike.arrayBuffer === "function"
       );
     });
+
+    let tagNames: string[] = [];
+    if (typeof tagsRaw === "string") {
+      try {
+        const parsed = JSON.parse(tagsRaw);
+        tagNames = Array.isArray(parsed)
+          ? parsed.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
+          : [];
+      } catch {
+        // ignore invalid JSON
+      }
+    }
+    const tagIds = await resolveTagNamesToIds(tagNames);
+    const projectTagsUpdate = {
+      projectTags: {
+        deleteMany: {},
+        create: tagIds.map((tagId) => ({ tagId })),
+      },
+    };
 
     if (removeImage === "true") {
       // Remove all images, then optionally add new ones - must have new images
@@ -192,10 +216,6 @@ export async function PATCH(req: Request, { params }: RouteParams) {
               typeof description === "string"
                 ? (description.trim() || null)
                 : existing.description,
-            category:
-              typeof category === "string"
-                ? (category.trim() || null)
-                : existing.category,
             featured:
               typeof featured === "string"
                 ? featured === "true"
@@ -210,6 +230,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
                 sortOrder: index,
               })),
             },
+            ...projectTagsUpdate,
           },
         });
       } else {
@@ -221,16 +242,13 @@ export async function PATCH(req: Request, { params }: RouteParams) {
               typeof description === "string"
                 ? (description.trim() || null)
                 : existing.description,
-            category:
-              typeof category === "string"
-                ? (category.trim() || null)
-                : existing.category,
             featured:
               typeof featured === "string"
-              ? featured === "true"
-              : existing.featured,
+                ? featured === "true"
+                : existing.featured,
             imageUrl: null,
             imagePublicId: null,
+            ...projectTagsUpdate,
           },
         });
       }
@@ -302,10 +320,6 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             typeof description === "string"
               ? (description.trim() || null)
               : existing.description,
-          category:
-            typeof category === "string"
-              ? (category.trim() || null)
-              : existing.category,
           featured:
             typeof featured === "string"
               ? featured === "true"
@@ -321,6 +335,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
               })),
             },
           }),
+          ...projectTagsUpdate,
         },
       });
     } else {
@@ -333,21 +348,21 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             typeof description === "string"
               ? (description.trim() || null)
               : existing.description,
-          category:
-            typeof category === "string"
-              ? (category.trim() || null)
-              : existing.category,
           featured:
             typeof featured === "string"
               ? featured === "true"
               : existing.featured,
+          ...projectTagsUpdate,
         },
       });
     }
 
     let updated = await prisma.project.findUnique({
       where: { id },
-      include: { images: { orderBy: { sortOrder: "asc" } } },
+      include: {
+        images: { orderBy: { sortOrder: "asc" } },
+        projectTags: { include: { tag: { select: { name: true } } } },
+      },
     });
 
     if (
@@ -368,12 +383,19 @@ export async function PATCH(req: Request, { params }: RouteParams) {
         });
         updated = await prisma.project.findUnique({
           where: { id },
-          include: { images: { orderBy: { sortOrder: "asc" } } },
+          include: {
+            images: { orderBy: { sortOrder: "asc" } },
+            projectTags: { include: { tag: { select: { name: true } } } },
+          },
         });
       }
     }
 
-    return NextResponse.json(updated);
+    if (!updated) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+    const { projectTags, ...rest } = updated;
+    return NextResponse.json({ ...rest, tags: projectTags.map((pt) => pt.tag.name) });
   } catch {
     for (const publicId of newUploadedPublicIds) {
       try {

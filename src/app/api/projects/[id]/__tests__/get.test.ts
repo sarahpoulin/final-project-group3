@@ -32,6 +32,10 @@ vi.mock("@/lib/db", () => ({
     },
 }));
 
+const projectTagsInclude = {
+    projectTags: { include: { tag: { select: { name: true } } } },
+};
+
 describe("GET /api/projects/[id]", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -44,7 +48,11 @@ describe("GET /api/projects/[id]", () => {
      */
     it("should return the correct project for each existing id", async () => {
         for (const project of mockProjects) {
-            const projectWithImages = { ...project, images: [] };
+            const projectWithImages = {
+                ...project,
+                images: [],
+                projectTags: (project.tags ?? []).map((name) => ({ tag: { name } })),
+            };
             (prisma.project.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(projectWithImages);
 
             const req = new Request(`http://localhost/api/projects/${project.id}`);
@@ -54,11 +62,14 @@ describe("GET /api/projects/[id]", () => {
 
             expect(prisma.project.findUnique).toHaveBeenCalledWith({
                 where: { id: project.id },
-                include: { images: { orderBy: { sortOrder: "asc" } } },
+                include: {
+                    images: { orderBy: { sortOrder: "asc" } },
+                    ...projectTagsInclude,
+                },
             });
             expect(res.status).toBe(200);
             const body = await res.json();
-            expect(body).toEqual(projectWithImages);
+            expect(body).toEqual({ ...project, images: [], tags: project.tags ?? [] });
         }
     });
 
@@ -77,7 +88,10 @@ describe("GET /api/projects/[id]", () => {
 
         expect(prisma.project.findUnique).toHaveBeenCalledWith({
             where: { id: "nonexistent" },
-            include: { images: { orderBy: { sortOrder: "asc" } } },
+            include: {
+                images: { orderBy: { sortOrder: "asc" } },
+                ...projectTagsInclude,
+            },
         });
         expect(res.status).toBe(404);
         const body = await res.json();

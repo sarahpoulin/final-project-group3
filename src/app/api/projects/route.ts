@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
 import { uploadImage, deleteImage, generateProjectFolder } from "@/lib/cloudinary";
+import { resolveTagNamesToIds } from "@/lib/tags";
 
 export const runtime = "nodejs";
 
@@ -18,21 +19,23 @@ const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 /**
  * GET /api/projects
  *
- * Returns a list of projects, optionally filtered by `category` and `featured` query parameters.
+ * Returns a list of projects, optionally filtered by `tag` and `featured` query parameters.
  */
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const category = searchParams.get("category");
+    const tagParam = searchParams.get("tag");
     const featuredParam = searchParams.get("featured");
 
     const where: {
-      category?: string;
       featured?: boolean;
+      projectTags?: { some: { tag: { name: { equals: string; mode: "insensitive" } } } };
     } = {};
 
-    if (category) {
-      where.category = category;
+    if (tagParam && tagParam.trim()) {
+      where.projectTags = {
+        some: { tag: { name: { equals: tagParam.trim(), mode: "insensitive" } } },
+      };
     }
 
     if (featuredParam !== null && featuredParam !== "") {
@@ -42,9 +45,16 @@ export async function GET(req: Request) {
     const projects = await prisma.project.findMany({
       where,
       orderBy: { createdAt: "desc" },
+      include: { projectTags: { include: { tag: { select: { name: true } } } } },
     });
 
-    return NextResponse.json(projects);
+    const serialized = projects.map((p) => ({
+      ...p,
+      tags: p.projectTags.map((pt) => pt.tag.name),
+      projectTags: undefined,
+    }));
+
+    return NextResponse.json(serialized);
   } catch {
     return NextResponse.json(
       { error: "Failed to fetch projects" },
@@ -57,7 +67,7 @@ export async function GET(req: Request) {
  * POST /api/projects
  *
  * Admin-only. Creates a new project. Accepts either:
- * - application/json with { title, description?, category?, featured?, thumbnailIndex?, uploadedImages? }
+ * - application/json with { title, description?, tags?, featured?, thumbnailIndex?, uploadedImages? }
  *   (uploadedImages = pre-uploaded to Cloudinary from client; progress is shown during that upload).
  * - multipart/form-data with title and optional image files (server uploads to Cloudinary).
  */
@@ -81,7 +91,7 @@ async function handlePostJson(req: Request) {
     const body = await req.json();
     const title = body?.title;
     const description = body?.description;
-    const category = body?.category;
+    const tagsRaw = body?.tags;
     const featured = body?.featured;
     const thumbnailIndexRaw = body?.thumbnailIndex;
     const uploadedImagesRaw = body?.uploadedImages;
@@ -145,16 +155,17 @@ async function handlePostJson(req: Request) {
         ? cloudinaryFolderRaw.trim()
         : null;
 
+    const tagNames = Array.isArray(tagsRaw)
+      ? tagsRaw.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
+      : [];
+    const tagIds = await resolveTagNamesToIds(tagNames);
+
     const project = await prisma.project.create({
       data: {
         title: titleTrimmed,
         description:
           description != null && typeof description === "string"
             ? description.trim() || null
-            : null,
-        category:
-          category != null && typeof category === "string"
-            ? category.trim() || null
             : null,
         featured: featured === true || featured === "true",
         imageUrl,
@@ -167,11 +178,21 @@ async function handlePostJson(req: Request) {
             sortOrder: index,
           })),
         },
+        ...(tagIds.length > 0 && {
+          projectTags: { create: tagIds.map((tagId) => ({ tagId })) },
+        }),
       },
-      include: { images: { orderBy: { sortOrder: "asc" } } },
+      include: {
+        images: { orderBy: { sortOrder: "asc" } },
+        projectTags: { include: { tag: { select: { name: true } } } },
+      },
     });
 
-    return NextResponse.json(project, { status: 201 });
+    const { projectTags, ...rest } = project;
+    return NextResponse.json(
+      { ...rest, tags: projectTags.map((pt) => pt.tag.name) },
+      { status: 201 }
+    );
   } catch {
     return NextResponse.json(
       { error: "Failed to create project" },
@@ -187,7 +208,7 @@ async function handlePostFormData(req: Request) {
     const formData = await req.formData();
     const title = formData.get("title");
     const description = formData.get("description");
-    const category = formData.get("category");
+    const tagsRaw = formData.get("tags");
     const featured = formData.get("featured");
     const thumbnailIndexRaw = formData.get("thumbnailIndex");
     const imageEntries = formData.getAll("image");
@@ -261,16 +282,25 @@ async function handlePostFormData(req: Request) {
     const imageUrl = chosenImage?.secureUrl ?? null;
     const imagePublicId = chosenImage?.publicId ?? null;
 
+    let tagNames: string[] = [];
+    if (typeof tagsRaw === "string") {
+      try {
+        const parsed = JSON.parse(tagsRaw);
+        tagNames = Array.isArray(parsed)
+          ? parsed.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
+          : [];
+      } catch {
+        // ignore invalid JSON
+      }
+    }
+    const tagIds = await resolveTagNamesToIds(tagNames);
+
     const project = await prisma.project.create({
       data: {
         title: titleTrimmed,
         description:
           description && typeof description === "string"
             ? description.trim() || null
-            : null,
-        category:
-          category && typeof category === "string"
-            ? category.trim() || null
             : null,
         featured: typeof featured === "string" ? featured === "true" : false,
         imageUrl,
@@ -283,11 +313,21 @@ async function handlePostFormData(req: Request) {
             sortOrder: index,
           })),
         },
+        ...(tagIds.length > 0 && {
+          projectTags: { create: tagIds.map((tagId) => ({ tagId })) },
+        }),
       },
-      include: { images: { orderBy: { sortOrder: "asc" } } },
+      include: {
+        images: { orderBy: { sortOrder: "asc" } },
+        projectTags: { include: { tag: { select: { name: true } } } },
+      },
     });
 
-    return NextResponse.json(project, { status: 201 });
+    const { projectTags, ...rest } = project;
+    return NextResponse.json(
+      { ...rest, tags: projectTags.map((pt) => pt.tag.name) },
+      { status: 201 }
+    );
   } catch {
     for (const publicId of uploadedPublicIds) {
       try {

@@ -38,6 +38,9 @@ vi.mock("@/lib/db", () => ({
         projectImage: {
             deleteMany: vi.fn().mockResolvedValue(undefined),
         },
+        projectTag: {
+            deleteMany: vi.fn().mockResolvedValue(undefined),
+        },
     },
 }));
 
@@ -46,6 +49,11 @@ vi.mock("@/lib/cloudinary", () => ({
     uploadImage: vi.fn(),
     deleteImage: vi.fn(),
     DEFAULT_PROJECTS_FOLDER: "projects",
+}));
+
+// Mock tags lib for PATCH handler
+vi.mock("@/lib/tags", () => ({
+    resolveTagNamesToIds: vi.fn().mockResolvedValue([]),
 }));
 
 describe("PATCH /api/projects/[id]", () => {
@@ -65,7 +73,11 @@ describe("PATCH /api/projects/[id]", () => {
             user: { isAdmin: true },
         });
 
-        const existing = { ...mockProjects[0], images: [] as { id: string; imageUrl: string; imagePublicId: string; sortOrder: number }[] };
+        const existing = {
+            ...mockProjects[0],
+            images: [] as { id: string; imageUrl: string; imagePublicId: string; sortOrder: number }[],
+            projectTags: [{ tag: { name: "Residential" } }],
+        };
         const updatedProject = {
             ...existing,
             title: "Updated Title",
@@ -74,7 +86,7 @@ describe("PATCH /api/projects/[id]", () => {
 
         (prisma.project.findUnique as ReturnType<typeof vi.fn>)
             .mockResolvedValueOnce(existing)
-            .mockResolvedValueOnce(updatedProject);
+            .mockResolvedValueOnce({ ...updatedProject, projectTags: existing.projectTags });
         (prisma.project.update as ReturnType<typeof vi.fn>).mockResolvedValue(updatedProject);
 
         const formData = new FormData();
@@ -88,22 +100,30 @@ describe("PATCH /api/projects/[id]", () => {
         const res = await PATCH(req, { params });
 
         expect(verifyAdmin).toHaveBeenCalledWith();
-        expect(prisma.project.findUnique).toHaveBeenCalledWith({
+        expect(prisma.project.findUnique).toHaveBeenCalledTimes(2);
+        expect(prisma.project.findUnique).toHaveBeenNthCalledWith(1, {
             where: { id: existing.id },
             include: { images: { orderBy: { sortOrder: "asc" } } },
         });
+        expect(prisma.project.findUnique).toHaveBeenNthCalledWith(2, {
+            where: { id: existing.id },
+            include: {
+                images: { orderBy: { sortOrder: "asc" } },
+                projectTags: { include: { tag: { select: { name: true } } } },
+            },
+        });
         expect(prisma.project.update).toHaveBeenCalledWith({
             where: { id: existing.id },
-            data: {
+            data: expect.objectContaining({
                 title: "Updated Title",
                 description: existing.description,
-                category: existing.category,
                 featured: existing.featured,
-            },
+                projectTags: { deleteMany: {}, create: [] },
+            }),
         });
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body).toEqual(updatedProject);
+        expect(body).toMatchObject({ title: "Updated Title", tags: ["Residential"] });
         expect(body.title).toBe(updatedProject.title.trim());
         expect(uploadImage).not.toHaveBeenCalled();
         expect(deleteImage).not.toHaveBeenCalled();

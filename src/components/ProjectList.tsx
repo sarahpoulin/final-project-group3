@@ -9,7 +9,7 @@ interface Project {
   description: string | null;
   imageUrl: string | null;
   imagePublicId: string | null;
-  category: string | null;
+  tags?: string[];
   featured: boolean;
   createdAt: string;
   updatedAt: string;
@@ -144,11 +144,18 @@ export default function ProjectList({ onEdit }: ProjectListProps) {
             {/* Title */}
             <h4 className="font-bold text-lg mb-2 text-foreground">{project.title}</h4>
 
-            {/* Category */}
-            {project.category && (
-              <p className="text-sm text-muted-foreground mb-2">
-                Category: {project.category}
-              </p>
+            {/* Tags */}
+            {project.tags && project.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {project.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-block px-2 py-0.5 rounded bg-primary/15 text-primary text-xs"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
             )}
 
             {/* Description */}

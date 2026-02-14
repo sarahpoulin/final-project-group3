@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
+import TagInput from './TagInput';
 
 interface ProjectImage {
   id: string;
@@ -16,7 +17,7 @@ interface Project {
   description: string | null;
   imageUrl: string | null;
   imagePublicId: string | null;
-  category: string | null;
+  tags?: string[];
   featured: boolean;
   createdAt: string;
   updatedAt: string;
@@ -32,7 +33,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
   const [isExpanded, setIsExpanded] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [existingImages, setExistingImages] = useState<{ url: string; publicId: string }[]>([]);
@@ -55,7 +56,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
     if (!editProject) return;
     setTitle(editProject.title);
     setDescription(editProject.description || '');
-    setCategory(editProject.category || '');
+    setTags(editProject.tags ?? []);
     const initialImages =
       editProject.images?.length
         ? editProject.images.map((i) => ({ url: i.imageUrl, publicId: i.imagePublicId }))
@@ -193,7 +194,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
       const formData = new FormData();
       formData.append('title', title);
       formData.append('description', description);
-      formData.append('category', category);
+      formData.append('tags', JSON.stringify(tags));
       formData.append('featured', 'false');
       imageFiles.forEach((file) => formData.append('image', file));
       if (removeImage) {
@@ -218,7 +219,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             setIsExpanded(false);
             setTitle('');
             setDescription('');
-            setCategory('');
+            setTags([]);
             setImageFiles([]);
             setImagePreviews([]);
             setExistingImages([]);
@@ -324,7 +325,7 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
           body: JSON.stringify({
             title,
             description,
-            category,
+            tags,
             featured: false,
             thumbnailIndex: thumbIdx,
             uploadedImages,
@@ -340,9 +341,9 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
         setSuccess(true);
         setIsExpanded(false);
         onSuccess?.(project);
-        setTitle('');
-        setDescription('');
-        setCategory('');
+            setTitle('');
+            setDescription('');
+            setTags([]);
         setImageFiles([]);
         setImagePreviews([]);
         setExistingImages([]);
@@ -437,18 +438,21 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
           />
         </div>
 
-        {/* Category Input */}
+        {/* Tags / Category Input */}
         <div>
-          <label htmlFor="category" className="block text-sm font-medium text-foreground mb-2">
-            Category
+          <label htmlFor="tags" className="block text-sm font-medium text-foreground mb-2">
+            Categories / Tags
           </label>
-          <input
-            type="text"
-            id="category"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="w-full px-4 py-2 border border-input bg-background text-foreground rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent transition-colors"
-            placeholder="e.g., Residential, Commercial, Landscape"
+          <TagInput
+            id="tags"
+            value={tags}
+            onChange={setTags}
+            placeholder="Type a tag, then comma or click outside to add"
+            fetchSuggestions={async (q) => {
+              const res = await fetch(`/api/tags?q=${encodeURIComponent(q)}`, { credentials: 'include' });
+              if (!res.ok) return [];
+              return res.json();
+            }}
           />
         </div>
 

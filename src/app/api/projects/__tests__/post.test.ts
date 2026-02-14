@@ -21,7 +21,6 @@ import { POST } from "../route";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
 import { uploadImage, deleteImage } from "@/lib/cloudinary";
-import type { ProjectApiResponse } from "@/types/project";
 
 // Mock auth guard used by the POST handler so we can simulate different
 // authorization outcomes (admin, non-admin, unauthenticated) in isolation.
@@ -46,6 +45,11 @@ vi.mock("@/lib/cloudinary", () => ({
     generateProjectFolder: vi.fn(() => "projects/20260213-120000"),
 }));
 
+// Mock tags lib so we avoid real DB calls for tag resolution
+vi.mock("@/lib/tags", () => ({
+    resolveTagNamesToIds: vi.fn().mockResolvedValue([]),
+}));
+
 describe("POST /api/projects", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -65,7 +69,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "   New Project   ");
         formData.set("description", "A brand new project");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
 
         const req = new Request("http://localhost/api/projects", {
@@ -103,19 +107,22 @@ describe("POST /api/projects", () => {
 
         (uploadImage as ReturnType<typeof vi.fn>).mockResolvedValue(uploaded);
 
-        const createdProject: ProjectApiResponse = {
+        const createdProject = {
             id: "proj_img_1",
             title: "Image Project",
             description: "Project with a valid jpeg image",
-            category: "Residential",
             featured: true,
             imageUrl: uploaded.secureUrl,
             imagePublicId: uploaded.publicId,
             createdAt: "2026-02-12T12:00:00.000Z",
             updatedAt: "2026-02-12T12:00:00.000Z",
+            tags: ["Residential"],
         };
 
-        (prisma.project.create as ReturnType<typeof vi.fn>).mockResolvedValue(createdProject);
+        (prisma.project.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+            ...createdProject,
+            projectTags: [{ tag: { name: "Residential" } }],
+        });
 
         const jpegFile = new File([new Uint8Array(1024)], "test.jpg", {
             type: "image/jpeg",
@@ -124,7 +131,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Image Project");
         formData.set("description", "Project with a valid jpeg image");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", jpegFile);
 
@@ -141,7 +148,6 @@ describe("POST /api/projects", () => {
             data: expect.objectContaining({
                 title: "Image Project",
                 description: "Project with a valid jpeg image",
-                category: "Residential",
                 featured: true,
                 imageUrl: uploaded.secureUrl,
                 imagePublicId: uploaded.publicId,
@@ -156,7 +162,10 @@ describe("POST /api/projects", () => {
                     ],
                 },
             }),
-            include: { images: { orderBy: { sortOrder: "asc" } } },
+            include: expect.objectContaining({
+                images: { orderBy: { sortOrder: "asc" } },
+                projectTags: { include: { tag: { select: { name: true } } } },
+            }),
         });
 
         expect(uploadImage).toHaveBeenCalledWith(
@@ -165,7 +174,7 @@ describe("POST /api/projects", () => {
         );
         expect(res.status).toBe(201);
         const body = await res.json();
-        expect(body).toEqual(createdProject);
+        expect(body).toMatchObject(createdProject);
     });
 
     /**
@@ -364,7 +373,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Project With SVG Image");
         formData.set("description", "Has an invalid SVG image");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", svgFile);
 
@@ -405,7 +414,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Project With Large Image");
         formData.set("description", "Has an oversized image");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", largeFile);
 
@@ -441,7 +450,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Image Project");
         formData.set("description", "Project with image");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", jpegFile);
 
@@ -481,7 +490,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Project With Failing Upload");
         formData.set("description", "Cloudinary should fail during upload");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", jpegFile);
 
@@ -533,7 +542,7 @@ describe("POST /api/projects", () => {
         const formData = new FormData();
         formData.set("title", "Project With DB Failure");
         formData.set("description", "DB create should fail after upload");
-        formData.set("category", "Residential");
+        formData.set("tags", JSON.stringify(["Residential"]));
         formData.set("featured", "true");
         formData.append("image", jpegFile);
 
@@ -587,7 +596,7 @@ describe("POST /api/projects", () => {
         const formDataCleanup = new FormData();
         formDataCleanup.set("title", "Project With Cleanup Failure");
         formDataCleanup.set("description", "DB create should fail and cleanup should fail");
-        formDataCleanup.set("category", "Residential");
+        formDataCleanup.set("tags", JSON.stringify(["Residential"]));
         formDataCleanup.set("featured", "true");
         formDataCleanup.append("image", jpegFile);
 

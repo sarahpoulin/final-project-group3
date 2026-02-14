@@ -10,7 +10,7 @@ export const mockProjects: ProjectApiResponse[] = [
     title: "Oak Floor Refinishing - Downtown Condo",
     description:
       "Complete sanding and refinishing of original oak hardwood floors in a downtown residential condo.",
-    category: "Residential",
+    tags: ["Residential"],
     featured: true,
     imageUrl:
       "https://res.cloudinary.com/demo/image/upload/v1738791001/shoreline/projects/oak-condo.jpg",
@@ -23,7 +23,7 @@ export const mockProjects: ProjectApiResponse[] = [
     title: "Maple Hardwood Installation - Family Home",
     description:
       "Installed new maple hardwood flooring throughout the main floor of a detached family home.",
-    category: "Residential",
+    tags: ["Residential"],
     featured: false,
     imageUrl:
       "https://res.cloudinary.com/demo/image/upload/v1738791201/shoreline/projects/maple-install.jpg",
@@ -36,7 +36,7 @@ export const mockProjects: ProjectApiResponse[] = [
     title: "Staircase Sanding & Staining",
     description:
       "Refinished residential staircase including sanding, staining, and protective polyurethane coating.",
-    category: "Residential",
+    tags: ["Residential"],
     featured: false,
     imageUrl:
       "https://res.cloudinary.com/demo/image/upload/v1738791401/shoreline/projects/staircase.jpg",
@@ -49,7 +49,7 @@ export const mockProjects: ProjectApiResponse[] = [
     title: "Commercial Showroom Flooring",
     description:
       "Installed durable engineered hardwood flooring in a high-traffic commercial showroom space.",
-    category: "Commercial",
+    tags: ["Commercial"],
     featured: false,
     imageUrl:
       "https://res.cloudinary.com/demo/image/upload/v1738791601/shoreline/projects/showroom.jpg",
@@ -62,7 +62,7 @@ export const mockProjects: ProjectApiResponse[] = [
     title: "Gymnasium Floor Restoration",
     description:
       "Full restoration and sealing of a school gymnasium hardwood sports floor.",
-    category: "Institutional",
+    tags: ["Institutional"],
     featured: false,
     imageUrl:
       "https://res.cloudinary.com/demo/image/upload/v1738791801/shoreline/projects/gym-floor.jpg",

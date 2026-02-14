@@ -10,7 +10,7 @@ interface Project {
   description: string | null;
   imageUrl: string | null;
   imagePublicId: string | null;
-  category: string | null;
+  tags?: string[];
   featured: boolean;
   createdAt: string;
   updatedAt: string;
