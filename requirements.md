@@ -27,7 +27,6 @@
 - Store images in Cloudinary
 - API routes for CRUD operations
 - Secure role-based access
-- Non-Functional Requirements
 
 ## Non-Functional Requirements
 
@@ -36,5 +35,21 @@
 - Secure authentication
 - Automated tests
 - CI/CD pipeline
-- Free hosting tiers only
 - High uptime (no DB pausing)
+
+## Environment Configuration
+
+### Development
+
+- **Database**: PostgreSQL running in Docker container
+- **Image Storage**: Cloudinary
+- **Frontend**: Local development server
+- **Backend**: Local development server
+
+### Production
+
+- **Database**: Neon (serverless PostgreSQL)
+- **Image Storage**: Cloudinary
+- **Frontend**: Deployed on Vercel
+- **Backend**: Deployed on Vercel (serverless functions)
+- **Hosting**: Free tiers only
