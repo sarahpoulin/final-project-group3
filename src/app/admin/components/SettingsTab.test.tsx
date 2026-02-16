@@ -30,23 +30,6 @@ describe("SettingsTab", () => {
   });
 
   describe("Initial render and loading state", () => {
-    it("renders General Settings section", () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => [],
-      });
-
-      render(<SettingsTab />);
-
-      expect(
-        screen.getByRole("heading", { name: "General Settings" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText("Configure site settings and preferences"),
-      ).toBeInTheDocument();
-      expect(screen.getByText("More settings coming soon...")).toBeInTheDocument();
-    });
-
     it("renders Category / Tag Editor section", () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

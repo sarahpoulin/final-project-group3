@@ -124,8 +124,3 @@ h6 {
 .wordmark {
   transform: scaleY(1.5) scaleX(1);
 }
-
-/* Admin dropdown styling */
-.admin-tab-select {
-  background-image: var(--dropdown-arrow);
-}
