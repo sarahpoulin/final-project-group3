@@ -1,8 +1,24 @@
+/**
+ * @module components/GoogleSignInButton
+ * @description Google OAuth sign-in button component for authentication.
+ */
 'use client';
 
 import { signIn } from "next-auth/react";
 import { useTheme } from "next-themes";
 
+/**
+ * Google OAuth sign-in button that initiates the authentication flow.
+ * Passes the current theme to the OAuth flow for consistent styling.
+ * Redirects to `/admin` upon successful authentication.
+ *
+ * @returns A styled button with Google branding that triggers OAuth sign-in
+ *
+ * @example
+ * ```tsx
+ * <GoogleSignInButton />
+ * ```
+ */
 export default function GoogleSignInButton() {
   const { theme, systemTheme } = useTheme();
   const activeTheme = theme === "system" ? systemTheme : theme;

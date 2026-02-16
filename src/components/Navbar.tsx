@@ -1,3 +1,7 @@
+/**
+ * @module components/Navbar
+ * @description Main navigation bar component with responsive mobile menu.
+ */
 "use client";
 
 import Link from "next/link";
@@ -8,11 +12,29 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 import localFont from 'next/font/local'
 
+/** Custom Clarendon Condensed Bold font for the wordmark */
 const clarendonCondensed = localFont({
   src: '../fonts/clarendoncondensed_bold.otf',
   display: 'swap',
 })
 
+/**
+ * Main navigation bar component with responsive design.
+ * Features:
+ * - Fixed position with backdrop blur
+ * - Desktop navigation links
+ * - Mobile hamburger menu
+ * - Theme toggle button
+ * - Admin link (authenticated users only)
+ * - Logout functionality
+ *
+ * @returns The navbar JSX element
+ *
+ * @example
+ * ```tsx
+ * <Navbar />
+ * ```
+ */
 export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { status } = useSession();
@@ -130,6 +152,14 @@ export default function Navbar() {
   );
 }
 
+/**
+ * Desktop navigation link with active state styling.
+ * @param props - Component props
+ * @param props.href - The link destination URL
+ * @param props.label - The link display text
+ * @returns A styled navigation link
+ * @internal
+ */
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
   const isActive = pathname === href;
@@ -150,6 +180,15 @@ function NavLink({ href, label }: { href: string; label: string }) {
   );
 }
 
+/**
+ * Mobile navigation link with active state styling and click handler.
+ * @param props - Component props
+ * @param props.href - The link destination URL
+ * @param props.label - The link display text
+ * @param props.onClick - Callback function when link is clicked (typically closes menu)
+ * @returns A styled mobile navigation link
+ * @internal
+ */
 function MobileNavLink({
   href,
   label,

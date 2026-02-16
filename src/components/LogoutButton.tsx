@@ -1,7 +1,23 @@
+/**
+ * @module components/LogoutButton
+ * @description Logout button component for authenticated users.
+ */
 "use client";
 
 import { useSession, signOut } from "next-auth/react";
 
+/**
+ * Logout button that appears for authenticated users.
+ * Positioned as a fixed element below the navbar on desktop.
+ * Only renders when the user is authenticated.
+ *
+ * @returns The logout button JSX element, or `null` if not authenticated
+ *
+ * @example
+ * ```tsx
+ * <LogoutButton />
+ * ```
+ */
 export default function LogoutButton() {
   const { status } = useSession();
   const isAuthenticated = status === "authenticated";
