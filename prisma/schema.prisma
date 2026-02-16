@@ -106,9 +106,9 @@ model ProjectImage {
   createdAt     DateTime @default(now())
 }
 
-// Editable Text
+// Editable Text (e.g. about.ourStoryHeading, about.ourStoryBody)
 model SiteSetting {
-  id    String @id @default(cuid())
-  key   String @unique
-  value String
+  id    String   @id @default(cuid())
+  key   String   @unique
+  value String   @db.Text
 }
