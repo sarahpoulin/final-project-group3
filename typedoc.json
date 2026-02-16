@@ -14,7 +14,7 @@
     "invalidLink": true
   },
   "searchInComments": true,
-  "exclude": ["**/*.md", "**/node_modules/**", "**/dist/**", "**/build/**", "**/doc-site/**", "**/tests/**", "**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["**/*.md", "**/node_modules/**", "**/dist/**", "**/build/**", "**/doc-site/**", "**/tests/**", "**/__tests__/**", "**/*.test.tsx", "**/*.spec.tsx"]
 }
 
 

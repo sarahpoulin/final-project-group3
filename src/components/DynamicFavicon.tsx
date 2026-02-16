@@ -1,8 +1,27 @@
+/**
+ * @module components/DynamicFavicon
+ * @description Client component that dynamically updates favicon based on theme.
+ */
 "use client";
 
 import { useTheme } from "next-themes";
 import { useEffect } from "react";
 
+/**
+ * Dynamically updates the browser favicon based on the current theme.
+ * Updates multiple favicon variants including:
+ * - Main favicon (.ico)
+ * - Shortcut icon
+ * - Apple touch icon
+ * - 16x16 and 32x32 PNG favicons
+ *
+ * @returns `null` - This component renders nothing, only manipulates document head
+ *
+ * @example
+ * ```tsx
+ * <DynamicFavicon />
+ * ```
+ */
 export default function DynamicFavicon() {
   const { resolvedTheme } = useTheme();
 

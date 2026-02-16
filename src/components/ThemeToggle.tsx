@@ -1,16 +1,40 @@
+/**
+ * @module components/ThemeToggle
+ * @description Theme toggle dropdown component for switching between light, dark, and system themes.
+ */
 "use client";
 
 import { useTheme } from "next-themes";
 import { useEffect, useRef, useState } from "react";
 
+/** Available theme options with their display configuration */
 const THEMES = [
   { value: "light", label: "Light", icon: SunIcon },
   { value: "dark", label: "Dark", icon: MoonIcon },
   { value: "system", label: "System", icon: MonitorIcon },
 ] as const;
 
+/** Union type of available theme values */
 type ThemeValue = (typeof THEMES)[number]["value"];
 
+/**
+ * Theme toggle dropdown component allowing users to switch between themes.
+ * Displays a button with the current theme icon that opens a dropdown
+ * with light, dark, and system options.
+ *
+ * Features:
+ * - Accessible dropdown with proper ARIA attributes
+ * - Click-outside to close
+ * - Visual indicator for current selection
+ * - Loading placeholder during hydration
+ *
+ * @returns The theme toggle button and dropdown JSX element
+ *
+ * @example
+ * ```tsx
+ * <ThemeToggle />
+ * ```
+ */
 export default function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
@@ -89,7 +113,13 @@ export default function ThemeToggle() {
   );
 }
 
-/* Icons */
+/**
+ * Sun icon for light theme.
+ * @param props - Component props
+ * @param props.className - Optional CSS class name
+ * @returns SVG sun icon
+ * @internal
+ */
 function SunIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -99,6 +129,13 @@ function SunIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Moon icon for dark theme.
+ * @param props - Component props
+ * @param props.className - Optional CSS class name
+ * @returns SVG moon icon
+ * @internal
+ */
 function MoonIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -107,6 +144,13 @@ function MoonIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Monitor icon for system theme.
+ * @param props - Component props
+ * @param props.className - Optional CSS class name
+ * @returns SVG monitor icon
+ * @internal
+ */
 function MonitorIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -116,6 +160,13 @@ function MonitorIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Checkmark icon for selected state.
+ * @param props - Component props
+ * @param props.className - Optional CSS class name
+ * @returns SVG checkmark icon
+ * @internal
+ */
 function CheckIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

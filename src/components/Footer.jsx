@@ -1,3 +1,7 @@
+/**
+ * @module components/Footer
+ * @description Site footer component with navigation, contact info, and social links.
+ */
 "use client";
 
 import Link from "next/link";
@@ -5,6 +9,18 @@ import Image from "next/image";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
+/**
+ * Site footer component displaying business logo, navigation links,
+ * contact information, and copyright notice.
+ * Adapts logo based on current theme (light/dark).
+ *
+ * @returns The footer JSX element
+ *
+ * @example
+ * ```tsx
+ * <Footer />
+ * ```
+ */
 export default function Footer() {
   const currentYear = new Date().getFullYear();
   const { resolvedTheme } = useTheme();
