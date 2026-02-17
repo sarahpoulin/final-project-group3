@@ -5,7 +5,7 @@
  * fetching tags, editing tags, deleting tags, and handling various states.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsTab from "./SettingsTab";
 
@@ -31,10 +31,11 @@ describe("SettingsTab", () => {
 
   describe("Initial render and loading state", () => {
     it("renders Category / Tag Editor section", () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => [],
-      });
+      mockFetch.mockImplementationOnce(
+        () =>
+          // Keep the component in its initial loading/fetching lifecycle
+          new Promise(() => {}),
+      );
 
       render(<SettingsTab />);
 
@@ -291,8 +292,8 @@ describe("SettingsTab", () => {
 
     it("disables Save button when saving", async () => {
       const user = userEvent.setup();
-      let resolveSave: () => void;
-      void new Promise<void>((resolve) => {
+      let resolveSave: (() => void) | undefined;
+      const savePromise = new Promise<void>((resolve) => {
         resolveSave = resolve;
       });
 
@@ -301,13 +302,7 @@ describe("SettingsTab", () => {
           ok: true,
           json: async () => mockTags,
         })
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              // Store resolve function to keep promise pending
-              resolveSave = resolve as () => void;
-            }),
-        );
+        .mockImplementationOnce(() => savePromise);
 
       render(<SettingsTab />);
 
@@ -326,8 +321,10 @@ describe("SettingsTab", () => {
         expect(savingButton).toBeDisabled();
       });
 
-      // Clean up: resolve the promise to prevent hanging
-      resolveSave!();
+      // Resolve the pending save request inside act to avoid dangling promises
+      await act(async () => {
+        resolveSave?.();
+      });
     });
 
     it("cancels edit mode when Cancel button is clicked", async () => {
@@ -566,8 +563,8 @@ describe("SettingsTab", () => {
     it("disables Delete button while deleting", async () => {
       const user = userEvent.setup();
       mockConfirm.mockReturnValue(true);
-      let resolveDelete: () => void;
-      void new Promise<void>((resolve) => {
+      let resolveDelete: (() => void) | undefined;
+      const deletePromise = new Promise<void>((resolve) => {
         resolveDelete = resolve;
       });
 
@@ -576,13 +573,7 @@ describe("SettingsTab", () => {
           ok: true,
           json: async () => mockTags,
         })
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              // Store resolve function to keep promise pending
-              resolveDelete = resolve as () => void;
-            }),
-        );
+        .mockImplementationOnce(() => deletePromise);
 
       render(<SettingsTab />);
 
@@ -598,8 +589,10 @@ describe("SettingsTab", () => {
         expect(deletingButton).toBeDisabled();
       });
 
-      // Clean up: resolve the promise to prevent hanging
-      resolveDelete!();
+      // Resolve the pending delete request inside act to avoid dangling promises
+      await act(async () => {
+        resolveDelete?.();
+      });
     });
 
     it("displays alert when delete fails", async () => {
