@@ -27,7 +27,7 @@ export default defineConfig({
         items: [
           { text: 'Setup Dev Environment', link: '/guides/setup-dev-environment.html' },
           { text: 'Managing Dev Environment', link: '/guides/managing-dev-environment.html' },
-          { text: 'GitHub Notifications', link: '/guides/setup-gethub-notifications.html' }
+          { text: 'GitHub Notifications', link: '/guides/setup-github-notifications.html' }
         ]
       },
       {
