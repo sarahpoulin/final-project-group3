@@ -16,7 +16,8 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Guide', link: '/guides/setup-dev-environment.html' },
+      { text: 'Guides', link: '/setup-dev-environment.html' },
+      { text: 'Project', link: '/requirements.html' },
       { text: 'Frontend Docs', link: '/frontend-docs.html' },
       { text: 'Backend Docs', link: '/api-docs.html' }
     ],
@@ -25,21 +26,30 @@ export default defineConfig({
       {
         text: 'Getting Started',
         items: [
-          { text: 'Setup Dev Environment', link: '/guides/setup-dev-environment.html' },
-          { text: 'Managing Dev Environment', link: '/guides/managing-dev-environment.html' },
-          { text: 'GitHub Notifications', link: '/guides/setup-github-notifications.html' }
+          { text: 'Setup Dev Environment', link: '/setup-dev-environment.html' },
+          { text: 'Managing Dev Environment', link: '/managing-dev-environment.html' },
+          { text: 'Git Workflow', link: '/git-workflow.html' },
+          { text: 'GitHub Notifications', link: '/setup-github-notifications.html' }
         ]
       },
       {
-        text: 'Development',
+        text: 'Development & Testing',
         items: [
-          { text: 'Git Workflow', link: '/guides/git-workflow.html' },
-          { text: 'Testing', link: '/guides/testing.html' },
-          { text: 'TypeDoc Guide', link: '/guides/typedoc-guide.html' }
+          { text: 'Testing Strategy', link: '/testing-strategy.html' },
+          { text: 'Testing', link: '/testing.html' },
+          { text: 'TypeDoc Guide', link: '/typedoc-guide.html' }
         ]
       },
       {
-        text: 'API Reference',
+        text: 'Project Documentation',
+        items: [
+          { text: 'Requirements', link: '/requirements.html' },
+          { text: 'Architecture', link: '/architechture.html' },
+          { text: 'Deployment', link: '/deployment.html' }
+        ]
+      },
+      {
+        text: 'Reference',
         items: [
           { text: 'Frontend', link: '/frontend-docs.html' },
           { text: 'Backend', link: '/api-docs.html' }
