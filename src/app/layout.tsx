@@ -29,8 +29,7 @@ const serif = Merriweather({
 });
 
 export const metadata: Metadata = {
-  // metadataBase: new URL("https://shorelinewoodworks.ca"),
-  metadataBase: new URL("http://localhost:3000"),
+  metadataBase: new URL("https://shorelinewoodworks.ca"),
   manifest: "/manifest.json",
   title: "Shoreline Woodworks",
   description:
@@ -48,8 +47,7 @@ export const metadata: Metadata = {
     title: "Shoreline Woodworks",
     description:
       "Stairs, railings, millwork, flooring, and renovations.",
-    // url: "https://shorelinewoodworks.ca",
-    url: "http://localhost:3000",
+    url: "https://shorelinewoodworks.ca",
     siteName: "Shoreline Woodworks",
     images: [
       {
@@ -69,6 +67,8 @@ export const metadata: Metadata = {
       "Stairs, railings, millwork, flooring, and renovations.",
     images: ["/og-image.jpg"],
   },
+  // TODO: Remove when ready; also remove public/robots.txt
+  robots: "noindex, nofollow",
 };
 
 /**
