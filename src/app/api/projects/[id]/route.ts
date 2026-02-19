@@ -12,6 +12,10 @@ import {
   dateToFolderAndCreatedAt,
   deleteFolder,
   deleteImage,
+  deleteResourcesByPrefix,
+  getImageUrl,
+  renameImage,
+  setAssetFolder,
   uploadImage,
   toDisplayUrl,
 } from "@/lib/cloudinary";
@@ -85,6 +89,27 @@ function folderForProject(project: {
   const min = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   return `${DEFAULT_PROJECTS_FOLDER}/${y}${m}${day}-${h}${min}${s}`;
+}
+
+/**
+ * Move one image in Cloudinary from oldFolder to targetFolder (rename + set asset_folder).
+ * Returns the new publicId and secure URL.
+ */
+async function moveImageToFolder(
+  publicId: string,
+  oldFolder: string,
+  targetFolder: string,
+): Promise<{ publicId: string; secureUrl: string }> {
+  const suffix = publicId.startsWith(`${oldFolder}/`)
+    ? publicId.slice(oldFolder.length + 1)
+    : publicId.split("/").pop() ?? publicId;
+  const suffixNoExt = suffix.includes(".")
+    ? suffix.replace(/\.[a-zA-Z0-9]+$/, "")
+    : suffix;
+  const newPublicId = `${targetFolder}/${suffixNoExt}`;
+  await renameImage(publicId, newPublicId);
+  await setAssetFolder(newPublicId, targetFolder);
+  return { publicId: newPublicId, secureUrl: getImageUrl(newPublicId) };
 }
 
 /**
@@ -291,6 +316,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     }
 
     const folderToUse = resolvedDate?.folder ?? folderForProject(existing);
+    let oldFolderToDelete: string | null = null;
 
     if (resolvedDate) {
       const todayStart = new Date();
@@ -482,7 +508,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             ...projectTagsUpdate,
           },
         });
-      } else {
+        } else {
         await prisma.project.update({
           where: { id },
           data: {
@@ -506,6 +532,13 @@ export async function PATCH(req: Request, { params }: RouteParams) {
             ...projectTagsUpdate,
           },
         });
+      }
+      if (
+        dateActuallyChanged &&
+        folderToUse !== existing.cloudinaryFolder &&
+        existing.cloudinaryFolder
+      ) {
+        oldFolderToDelete = existing.cloudinaryFolder;
       }
     } else if (
       keepPublicIds.size < existing.images.length ||
@@ -573,10 +606,78 @@ export async function PATCH(req: Request, { params }: RouteParams) {
         uploadedImages.push({ secureUrl: img.secureUrl, publicId: img.publicId });
       }
 
-      const firstKept = kept[0];
-      const firstNew = uploadedImages[0];
-      const newImageUrl = firstKept?.imageUrl ?? firstNew?.secureUrl ?? null;
-      const newImagePublicId = firstKept?.imagePublicId ?? firstNew?.publicId ?? null;
+      const movedMap: Record<string, { publicId: string; secureUrl: string }> = {};
+      if (
+        dateActuallyChanged &&
+        folderToUse !== existing.cloudinaryFolder &&
+        existing.cloudinaryFolder
+      ) {
+        const oldFolder = existing.cloudinaryFolder;
+        try {
+          for (const img of kept) {
+            if (img.imagePublicId.startsWith(`${oldFolder}/`)) {
+              movedMap[img.imagePublicId] = await moveImageToFolder(
+                img.imagePublicId,
+                oldFolder,
+                folderToUse,
+              );
+            }
+          }
+          for (const img of uploadedImagesPreUploaded) {
+            if (img.publicId.startsWith(`${oldFolder}/`) && !movedMap[img.publicId]) {
+              movedMap[img.publicId] = await moveImageToFolder(
+                img.publicId,
+                oldFolder,
+                folderToUse,
+              );
+            }
+          }
+          oldFolderToDelete = oldFolder;
+        } catch (moveErr) {
+          const message =
+            moveErr instanceof Error ? moveErr.message : "Failed to move images to new date folder";
+          console.error("PATCH project: move images to date folder failed", {
+            id,
+            oldFolder,
+            targetFolder: folderToUse,
+            error: moveErr,
+          });
+          return NextResponse.json(
+            {
+              error: "Failed to update project. Could not move images to the selected date folder.",
+              details: message,
+            },
+            { status: 500 },
+          );
+        }
+      }
+
+      const resolvedKept = kept.map((img) =>
+        movedMap[img.imagePublicId]
+          ? { publicId: movedMap[img.imagePublicId].publicId, secureUrl: movedMap[img.imagePublicId].secureUrl }
+          : { publicId: img.imagePublicId, secureUrl: img.imageUrl },
+      );
+      const resolvedUploaded = uploadedImages.map((img) =>
+        movedMap[img.publicId]
+          ? { publicId: movedMap[img.publicId].publicId, secureUrl: movedMap[img.publicId].secureUrl }
+          : img,
+      );
+      const firstImage = resolvedKept[0] ?? resolvedUploaded[0];
+      const newImageUrl = firstImage?.secureUrl ?? null;
+      const newImagePublicId = firstImage?.publicId ?? null;
+
+      if (oldFolderToDelete) {
+        for (let i = 0; i < kept.length; i++) {
+          await prisma.projectImage.update({
+            where: { id: kept[i].id },
+            data: {
+              imagePublicId: resolvedKept[i].publicId,
+              imageUrl: resolvedKept[i].secureUrl,
+              sortOrder: i,
+            },
+          });
+        }
+      }
 
       await prisma.project.update({
         where: { id },
@@ -598,9 +699,9 @@ export async function PATCH(req: Request, { params }: RouteParams) {
               ...(displayOrderInsertIndex != null && { displayOrder: displayOrderInsertIndex }),
               ...(resolvedDateIsMonthOnly !== null && { dateIsMonthOnly: resolvedDateIsMonthOnly }),
             }),
-          ...(uploadedImages.length > 0 && {
+          ...(resolvedUploaded.length > 0 && {
             images: {
-              create: uploadedImages.map((img, index) => ({
+              create: resolvedUploaded.map((img, index) => ({
                 imageUrl: img.secureUrl,
                 imagePublicId: img.publicId,
                 sortOrder: kept.length + index,
@@ -611,28 +712,108 @@ export async function PATCH(req: Request, { params }: RouteParams) {
         },
       });
     } else {
-      // No image change: update text/featured/date only
-      await prisma.project.update({
-        where: { id },
-        data: {
-          title: titleTrimmed,
-          description:
-            typeof description === "string"
-              ? (description.trim() || null)
-              : existing.description,
-          featured:
-            typeof featured === "string"
-              ? featured === "true"
-              : existing.featured,
-          ...(dateActuallyChanged && resolvedDate && {
-            cloudinaryFolder: folderToUse,
-            createdAt: resolvedDate.createdAt,
-            ...(displayOrderInsertIndex != null && { displayOrder: displayOrderInsertIndex }),
-            ...(resolvedDateIsMonthOnly !== null && { dateIsMonthOnly: resolvedDateIsMonthOnly }),
-          }),
-          ...projectTagsUpdate,
-        },
-      });
+      // No image change: update text/featured/date only (and move images if date/folder changed)
+      if (
+        dateActuallyChanged &&
+        folderToUse !== existing.cloudinaryFolder &&
+        existing.cloudinaryFolder &&
+        existing.images.length > 0
+      ) {
+        const oldFolder = existing.cloudinaryFolder;
+        const movedMap: Record<string, { publicId: string; secureUrl: string }> = {};
+        try {
+          for (const img of existing.images) {
+            if (img.imagePublicId.startsWith(`${oldFolder}/`)) {
+              movedMap[img.imagePublicId] = await moveImageToFolder(
+                img.imagePublicId,
+                oldFolder,
+                folderToUse,
+              );
+            }
+          }
+          oldFolderToDelete = oldFolder;
+          for (const img of existing.images) {
+            const newData = movedMap[img.imagePublicId];
+            if (newData) {
+              await prisma.projectImage.update({
+                where: { id: img.id },
+                data: {
+                  imagePublicId: newData.publicId,
+                  imageUrl: newData.secureUrl,
+                },
+              });
+            }
+          }
+          const firstImg = existing.images[0];
+          const firstMoved = firstImg ? movedMap[firstImg.imagePublicId] : null;
+          await prisma.project.update({
+            where: { id },
+            data: {
+              title: titleTrimmed,
+              description:
+                typeof description === "string"
+                  ? (description.trim() || null)
+                  : existing.description,
+              featured:
+                typeof featured === "string"
+                  ? featured === "true"
+                  : existing.featured,
+              cloudinaryFolder: folderToUse,
+              imageUrl: firstMoved?.secureUrl ?? existing.imageUrl,
+              imagePublicId: firstMoved?.publicId ?? existing.imagePublicId,
+              ...(resolvedDate && {
+                createdAt: resolvedDate.createdAt,
+                ...(displayOrderInsertIndex != null && { displayOrder: displayOrderInsertIndex }),
+                ...(resolvedDateIsMonthOnly !== null && { dateIsMonthOnly: resolvedDateIsMonthOnly }),
+              }),
+              ...projectTagsUpdate,
+            },
+          });
+        } catch (moveErr) {
+          const message =
+            moveErr instanceof Error ? moveErr.message : "Failed to move images to new date folder";
+          console.error("PATCH project: move images (no image change) failed", {
+            id,
+            oldFolder,
+            targetFolder: folderToUse,
+            error: moveErr,
+          });
+          return NextResponse.json(
+            {
+              error: "Failed to update project. Could not move images to the selected date folder.",
+              details: message,
+            },
+            { status: 500 },
+          );
+        }
+      } else {
+        await prisma.project.update({
+          where: { id },
+          data: {
+            title: titleTrimmed,
+            description:
+              typeof description === "string"
+                ? (description.trim() || null)
+                : existing.description,
+            featured:
+              typeof featured === "string"
+                ? featured === "true"
+                : existing.featured,
+            ...(dateActuallyChanged && resolvedDate && {
+              cloudinaryFolder: folderToUse,
+              createdAt: resolvedDate.createdAt,
+              ...(displayOrderInsertIndex != null && { displayOrder: displayOrderInsertIndex }),
+              ...(resolvedDateIsMonthOnly !== null && { dateIsMonthOnly: resolvedDateIsMonthOnly }),
+            }),
+            ...projectTagsUpdate,
+          },
+        });
+      }
+    }
+
+    if (oldFolderToDelete) {
+      await deleteResourcesByPrefix(`${oldFolderToDelete}/`);
+      await deleteFolder(oldFolderToDelete);
     }
 
     let updated = await prisma.project.findUnique({

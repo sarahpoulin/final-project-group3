@@ -7,11 +7,18 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth-guards";
 import {
+  dateToFolderAndCreatedAt,
+  deleteFolder,
+  deleteResourcesByPrefix,
+  generateProjectFolder,
+  getImageUrl,
+  getNextFolderForDatePrefix,
+  parseFolderToCreatedAt,
+  renameImage,
+  setAssetFolder,
+  toDisplayUrl,
   uploadImage,
   deleteImage,
-  generateProjectFolder,
-  parseFolderToCreatedAt,
-  toDisplayUrl,
 } from "@/lib/cloudinary";
 import { resolveTagNamesToIds } from "@/lib/tags";
 
@@ -240,19 +247,53 @@ async function handlePostJson(req: Request) {
             )
           : 0;
     const chosenImage = uploadedImages[thumbnailIndex] ?? uploadedImages[0] ?? null;
-    const imageUrl = chosenImage?.secureUrl ?? null;
-    const imagePublicId = chosenImage?.publicId ?? null;
 
     const cloudinaryFolder =
       typeof cloudinaryFolderRaw === "string" && cloudinaryFolderRaw.trim().length > 0
         ? cloudinaryFolderRaw.trim()
         : null;
 
-    const dateIsMonthOnly =
-      cloudinaryFolder != null && body?.dateIsMonthOnly === true ? true : undefined;
+    // Explicit project date (e.g. user picked date after uploading) overrides folder-derived date.
+    const yearParam = body?.projectDateYear;
+    const monthParam = body?.projectDateMonth;
+    const dayParam = body?.projectDateDay;
+    const yearNum =
+      typeof yearParam === "number"
+        ? yearParam
+        : typeof yearParam === "string"
+          ? parseInt(yearParam.trim(), 10)
+          : NaN;
+    const monthNum =
+      typeof monthParam === "number"
+        ? monthParam
+        : typeof monthParam === "string"
+          ? parseInt(monthParam.trim(), 10)
+          : NaN;
+    const hasExplicitDate =
+      !Number.isNaN(yearNum) &&
+      !Number.isNaN(monthNum) &&
+      yearNum >= 1970 &&
+      monthNum >= 1 &&
+      monthNum <= 12;
+    const dayNum =
+      typeof dayParam === "number"
+        ? dayParam
+        : typeof dayParam === "string" && dayParam.trim() !== ""
+          ? parseInt(dayParam.trim(), 10)
+          : 1;
+    const validDay = !Number.isNaN(dayNum) && dayNum >= 1 && dayNum <= 31;
 
-    const createdAt =
-      cloudinaryFolder != null ? parseFolderToCreatedAt(cloudinaryFolder) : undefined;
+    let createdAt: Date | undefined;
+    let dateIsMonthOnly: boolean | undefined;
+
+    if (hasExplicitDate && validDay) {
+      createdAt = new Date(yearNum, monthNum - 1, dayNum, 0, 0, 0, 0);
+      dateIsMonthOnly = body?.dateIsMonthOnly === true || body?.dateIsMonthOnly === "true";
+    } else if (cloudinaryFolder != null) {
+      createdAt = parseFolderToCreatedAt(cloudinaryFolder) ?? undefined;
+      dateIsMonthOnly = body?.dateIsMonthOnly === true || body?.dateIsMonthOnly === "true";
+    }
+
     if (createdAt) {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -265,6 +306,72 @@ async function handlePostJson(req: Request) {
         );
       }
     }
+
+    // When user picked a date after uploading, move images to a date-based folder in Cloudinary.
+    let finalUploadedImages = uploadedImages;
+    let finalCloudinaryFolder = cloudinaryFolder;
+    let finalImageUrl = chosenImage?.secureUrl ?? null;
+    let finalImagePublicId = chosenImage?.publicId ?? null;
+    let oldFolderToDelete: string | null = null;
+
+    if (
+      hasExplicitDate &&
+      validDay &&
+      cloudinaryFolder != null &&
+      cloudinaryFolder.trim() !== ""
+    ) {
+      const { prefix } = dateToFolderAndCreatedAt(yearNum, monthNum, dayNum);
+      const existing = await prisma.project.findMany({
+        where: { cloudinaryFolder: { startsWith: prefix } },
+        select: { cloudinaryFolder: true },
+      });
+      const existingPaths = existing
+        .map((p) => p.cloudinaryFolder)
+        .filter((f): f is string => typeof f === "string" && f.length > 0);
+      const targetFolder = getNextFolderForDatePrefix(prefix, existingPaths);
+      const oldFolder = cloudinaryFolder.trim();
+
+      if (targetFolder !== oldFolder) {
+        const moved: { secureUrl: string; publicId: string }[] = [];
+        try {
+          for (const img of uploadedImages) {
+            const suffix = img.publicId.startsWith(`${oldFolder}/`)
+              ? img.publicId.slice(oldFolder.length + 1)
+              : img.publicId.split("/").pop() ?? img.publicId;
+            // Cloudinary public_id should not include file extension for images
+            const suffixNoExt = suffix.includes(".")
+              ? suffix.replace(/\.[a-zA-Z0-9]+$/, "")
+              : suffix;
+            const newPublicId = `${targetFolder}/${suffixNoExt}`;
+            await renameImage(img.publicId, newPublicId);
+            await setAssetFolder(newPublicId, targetFolder);
+            moved.push({ publicId: newPublicId, secureUrl: getImageUrl(newPublicId) });
+          }
+          finalUploadedImages = moved;
+          finalCloudinaryFolder = targetFolder;
+          const chosenMoved = moved[thumbnailIndex] ?? moved[0] ?? null;
+          finalImageUrl = chosenMoved?.secureUrl ?? null;
+          finalImagePublicId = chosenMoved?.publicId ?? null;
+          oldFolderToDelete = oldFolder;
+        } catch (moveErr) {
+          const message =
+            moveErr instanceof Error ? moveErr.message : "Failed to move images to project date folder";
+          console.error("Project create: move images to date folder failed", {
+            oldFolder,
+            targetFolder,
+            error: moveErr,
+          });
+          return NextResponse.json(
+            {
+              error: "Failed to create project. Could not move images to the selected date folder.",
+              details: message,
+            },
+            { status: 500 },
+          );
+        }
+      }
+    }
+
     const tagNames = Array.isArray(tagsRaw)
       ? tagsRaw.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean)
       : [];
@@ -282,13 +389,13 @@ async function handlePostJson(req: Request) {
             : null,
         featured: featured === true || featured === "true",
         displayOrder: insertIndex,
-        imageUrl,
-        imagePublicId,
-        cloudinaryFolder,
+        imageUrl: finalImageUrl,
+        imagePublicId: finalImagePublicId,
+        cloudinaryFolder: finalCloudinaryFolder,
         ...(createdAt && { createdAt }),
         ...(dateIsMonthOnly !== undefined && { dateIsMonthOnly }),
         images: {
-          create: uploadedImages.map((img, index) => ({
+          create: finalUploadedImages.map((img, index) => ({
             imageUrl: img.secureUrl,
             imagePublicId: img.publicId,
             sortOrder: index,
@@ -303,6 +410,15 @@ async function handlePostJson(req: Request) {
         projectTags: { include: { tag: { select: { name: true } } } },
       },
     });
+
+    if (oldFolderToDelete) {
+      try {
+        await deleteResourcesByPrefix(`${oldFolderToDelete}/`);
+        await deleteFolder(oldFolderToDelete);
+      } catch (err) {
+        console.error("Failed to delete old Cloudinary folder after move:", oldFolderToDelete, err);
+      }
+    }
 
     const { projectTags, ...rest } = project;
     return NextResponse.json(
