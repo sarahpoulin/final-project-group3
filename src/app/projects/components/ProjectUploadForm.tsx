@@ -535,13 +535,19 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
             thumbnailIndex: thumbIdx,
             uploadedImages: newImages.map((n) => ({ secureUrl: n.secureUrl, publicId: n.publicId })),
             cloudinaryFolder: cloudinaryFolder ?? undefined,
-            dateIsMonthOnly: hasDate && projectDateDay.trim() === '',
+            ...(hasDate && {
+              projectDateYear: projectDateYear.trim(),
+              projectDateMonth: projectDateMonth.trim(),
+              projectDateDay: projectDateDay.trim(),
+              dateIsMonthOnly: projectDateDay.trim() === '',
+            }),
           }),
         });
 
         if (!projectRes.ok) {
           const data = await projectRes.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to create project');
+          const msg = data.error || 'Failed to create project';
+          throw new Error(data.details ? `${msg} (${data.details})` : msg);
         }
         const project = await projectRes.json();
         setSuccess(true);
@@ -912,18 +918,40 @@ export default function ProjectUploadForm({ onSuccess, editProject }: ProjectUpl
         {/* Submit Button / Upload progress */}
         <div className="space-y-2">
           {loading || uploadingCount > 0 ? (
-            <div className="relative w-full h-12 rounded-lg overflow-hidden bg-muted border border-border flex items-center justify-center">
-              <div
-                className="absolute inset-y-0 left-0 bg-primary text-primary-foreground transition-[width] duration-300 ease-out"
-                style={{ width: `${uploadProgress}%` }}
-              />
-              <span className="relative z-10 font-medium text-foreground">
-                {uploadingCount > 0
-                  ? `Uploading images... ${uploadProgress}%`
-                  : uploadProgress > 0 && uploadProgress < 100
-                    ? `${editProject ? 'Updating' : 'Uploading'}... ${uploadProgress}%`
-                    : editProject ? 'Updating...' : 'Uploading...'}
-              </span>
+            <div className="relative w-full h-12 rounded-lg overflow-hidden bg-muted border border-border flex items-center justify-center gap-3">
+              {uploadingCount > 0 ? (
+                <>
+                  <div
+                    className="absolute inset-y-0 left-0 bg-primary/90 text-primary-foreground transition-[width] duration-300 ease-out"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                  <span className="relative z-10 font-medium text-foreground">
+                    Uploading images... {uploadProgress}%
+                  </span>
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="relative z-10 size-5 shrink-0 animate-spin"
+                    viewBox="0 0 24 24"
+                    aria-hidden
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      fill="none"
+                      stroke="var(--foreground)"
+                      strokeWidth="2.5"
+                      strokeDasharray="40 23"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  <span className="relative z-10 font-medium text-foreground">
+                    {editProject ? 'Updating...' : 'Creating Project...'}
+                  </span>
+                </>
+              )}
             </div>
           ) : (
             <button
